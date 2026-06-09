@@ -22,7 +22,6 @@ agent:
   api_max_retries: 3
   service_tier: fast
   tool_use_enforcement: true
-  - nousresearch
   task_completion_guidance: true
   environment_probe: true
   environment_hint: ''

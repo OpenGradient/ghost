@@ -67,9 +67,11 @@ ghost --yolo -z "..."       # one-shot
 - **Hosted models aren't anonymous.** Nous still authenticates your account when you opt
   into 405B/70B. The proxy hides your IP and the scrubber hides your PII/secrets, but the
   account link remains. The **local default is the true incognito mode.**
-- **Engine branding.** The underlying Hermes engine's chrome (logo, banner) isn't stripped;
-  doing so requires forking the 2.9GB engine. ghost rebrands the identity (persona/SOUL/command),
-  not the engine binary.
+- **Engine fork.** `install.sh` forks the engine into a standalone, debranded `~/.ghost-engine`
+  (`scripts/fork-engine.sh` copies + relocates the venv, `scripts/debrand.py` scrubs visible
+  strings) -- the banner, logo (👻), and user-facing text all read **Ghost**, and your normie
+  `hermes` install is untouched. Internal Python package names stay `hermes_cli` (invisible to
+  users; renaming them across ~1M lines would break imports for no user-facing gain).
 - **Proxies are trust-shifted.** Webshare sees your real IP unless you also run a VPN in front.
 
 ## License

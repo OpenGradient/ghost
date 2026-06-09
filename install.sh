@@ -67,9 +67,15 @@ for svc in hermes-proxy hermes-pii-scrubber; do
   launchctl load -w "$LA/com.advait.$svc.plist"
 done
 
-# --- the `ghost` command ---
+# --- fork the engine: a standalone, debranded "Ghost" engine (normie `hermes` untouched) ---
+ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
+GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$HERMES_HOME/hermes-agent" \
+  bash "$REPO/scripts/fork-engine.sh"
+
+# --- the `ghost` command (runs the forked, debranded engine) ---
 mkdir -p "$HOME/.local/bin"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" \
+    "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
 chmod +x "$HOME/.local/bin/ghost"
 
 echo

@@ -20,4 +20,4 @@ else
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 echo "$STATUS · $VPN" >&2
-exec hermes -p uncensored "$@"
+exec "__ENG__/venv/bin/hermes" -p uncensored "$@"
