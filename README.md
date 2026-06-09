@@ -120,8 +120,21 @@ name/email/handles so the scrubber redacts them on the hosted path.
 ```bash
 ghost                       # chat (default = Hermes 405B, scrubbed + proxied)
 ghost --yolo -z "..."       # one-shot
+ghost --paths "..."         # agentic file work: real filesystem paths reach 405B
+                            #   (your name + secrets in content are still scrubbed)
 # inside:  /model           -> switch between hermes-4-405b, hermes-4-70b, uncensored-local
 ```
+
+### Agentic file work -- two ways
+
+By default the scrubber redacts everything outbound, **including filesystem paths** -- which
+breaks file ops on 405B (it sees `/Users/[REDACTED_PII]/...`). Two ways to do real file work:
+
+- **`ghost --paths`** -- flips on *path-aware* mode for that session: real paths pass through to
+  405B so it can read/write files, while your name + secrets in prose are still scrubbed. The
+  trade is that your home/username becomes visible to Nous inside those paths.
+- **Local model** (`/model` → `uncensored-local`) -- never touches the scrubber, so paths are
+  always real and **nothing leaves the box**. Weaker agent, but the fully-private option.
 
 ---
 

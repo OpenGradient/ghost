@@ -7,6 +7,12 @@
 SCRUBBER="http://127.0.0.1:8788"
 PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
+SENTINEL="$HOME/.hermes/privacy/.pass_paths"
+
+# --paths (or --code): path-aware mode -- let real filesystem paths reach 405B for agentic
+# file work; name + secrets in content are still scrubbed. Default off = full redaction.
+PASS_PATHS=""
+case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
 # Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
 "$PY" "$HOME/.hermes/privacy/ensure_scrubber_route.py" 2>/dev/null || true
@@ -19,5 +25,14 @@ else
   STATUS="👻 ghost · ⚠️ privacy infra DOWN (scrubber=$HC proxy=${EXIT_IP:-down}) -- 405B unreachable, falling back to LOCAL 32B (offline)"
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
+[ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to 405B)"
 echo "$STATUS · $VPN" >&2
-exec "__ENG__/venv/bin/hermes" -p uncensored "$@"
+HB="__ENG__/venv/bin/hermes"
+if [ -n "$PASS_PATHS" ]; then
+  : > "$SENTINEL"
+  trap 'rm -f "$SENTINEL"' EXIT INT TERM
+  "$HB" -p uncensored "$@"
+else
+  rm -f "$SENTINEL" 2>/dev/null
+  exec "$HB" -p uncensored "$@"
+fi

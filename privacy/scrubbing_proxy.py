@@ -80,17 +80,28 @@ def load_denylist():
                     seed.append(ln)
     except FileNotFoundError:
         pass
-    # longest-first so "Advait Jayant" matches before "Advait"
+    # longest-first so a full name matches before its first-name substring
     return sorted(set(seed), key=len, reverse=True)
 
 
 DENY = [(t, re.compile(re.escape(t), re.IGNORECASE)) for t in load_denylist()]
 
+# Path-aware mode: when this sentinel exists (set by `ghost --paths` for one session),
+# filesystem paths are protected from redaction so 405B can do agentic file work. Default
+# absent = full redaction. Name/secrets in prose are always scrubbed either way.
+PASS_PATHS_SENTINEL = os.path.expanduser("~/.hermes/privacy/.pass_paths")
+PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
-def scrub(text):
+
+def scrub(text, pass_paths=False):
     if not isinstance(text, str) or not text:
         return text, 0
     n = 0
+    held = []
+    if pass_paths:  # protect filesystem paths from redaction (agentic file-work mode)
+        def _hold(m):
+            held.append(m.group(0)); return f"\x00P{len(held)-1}\x00"
+        text = PATH_RE.sub(_hold, text)
     for _term, rx in DENY:
         text, c = rx.subn("[REDACTED_PII]", text); n += c
     text, c = EMAIL_RE.subn("[REDACTED_EMAIL]", text); n += c
@@ -100,6 +111,8 @@ def scrub(text):
     text, c = PHONE_RE.subn("[REDACTED_PHONE]", text); n += c
     for rx in SECRET_RES:
         text, c = rx.subn("[REDACTED_SECRET]", text); n += c
+    for i, p in enumerate(held):
+        text = text.replace(f"\x00P{i}\x00", p)
     return text, n
 
 
@@ -107,6 +120,7 @@ def scrub_body(obj):
     total = 0
     if not isinstance(obj, dict):
         return obj, 0
+    pp = os.path.exists(PASS_PATHS_SENTINEL)  # path-aware mode for this request?
     msgs = obj.get("messages")
     if isinstance(msgs, list):
         for m in msgs:
@@ -114,16 +128,16 @@ def scrub_body(obj):
                 continue
             c = m.get("content")
             if isinstance(c, str):
-                m["content"], k = scrub(c); total += k
+                m["content"], k = scrub(c, pp); total += k
             elif isinstance(c, list):
                 for part in c:
                     if isinstance(part, dict) and isinstance(part.get("text"), str):
-                        part["text"], k = scrub(part["text"]); total += k
+                        part["text"], k = scrub(part["text"], pp); total += k
     p = obj.get("prompt")
     if isinstance(p, str):
-        obj["prompt"], k = scrub(p); total += k
+        obj["prompt"], k = scrub(p, pp); total += k
     elif isinstance(p, list):
-        obj["prompt"] = [scrub(x)[0] if isinstance(x, str) else x for x in p]
+        obj["prompt"] = [scrub(x, pp)[0] if isinstance(x, str) else x for x in p]
     return obj, total
 
 
