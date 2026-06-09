@@ -1,0 +1,16 @@
+# secrets + machine state -- never commit
+.env
+auth.json
+webshare_proxies.txt
+profile/.env
+profile/auth.json
+privacy/searxng/settings.yml
+
+# logs + backups + caches
+*.log
+*.bak
+*.out.log
+*.err.log
+__pycache__/
+*.pyc
+.DS_Store

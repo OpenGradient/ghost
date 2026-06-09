@@ -1,0 +1,23 @@
+#!/bin/sh
+# ghost -- incognito agentic harness launcher (profile: uncensored).
+#   Default model: LOCAL 32B abliterated (uncensored-local) -- fully offline, nothing leaves the box.
+#   Optional hosted via /model: hermes-4-405b / hermes-4-70b -> PII scrubber (8788)
+#     -> rotating Webshare proxy (8899) -> Nous.   Auxiliary tasks run on the local 7B (ghost-tool).
+# Warns (never hard-blocks) if the privacy infra is down, so the offline default still runs.
+SCRUBBER="http://127.0.0.1:8788"
+PROXY="http://127.0.0.1:8899"
+PY=__PYTHON__
+
+# Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
+"$PY" "$HOME/.hermes/privacy/ensure_scrubber_route.py" 2>/dev/null || true
+
+HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
+EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
+if [ "$HC" = "200" ] && [ -n "$EXIT_IP" ]; then
+  STATUS="👻 ghost incognito · default = local 32B (offline) · hosted models scrubbed + proxied via $EXIT_IP"
+else
+  STATUS="👻 ghost incognito · default = local 32B (offline, OK) · ⚠️ privacy infra down (scrubber=$HC proxy=${EXIT_IP:-down}); HOSTED models will fail until you restart them"
+fi
+if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
+echo "$STATUS · $VPN" >&2
+exec hermes -p uncensored "$@"

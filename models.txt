@@ -1,0 +1,3 @@
+# ghost local models — `ollama pull <src>` then `ollama cp <src> <alias>`
+hf.co/zetasepic/Qwen2.5-32B-Instruct-abliterated-v2-GGUF:Q6_K	uncensored-local
+hf.co/mradermacher/Qwen2.5-7B-Instruct-abliterated-v2-GGUF:Q6_K	ghost-tool
