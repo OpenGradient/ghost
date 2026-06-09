@@ -21,7 +21,7 @@ agent:
   restart_drain_timeout: 60
   api_max_retries: 3
   service_tier: fast
-  tool_use_enforcement:
+  tool_use_enforcement: true
   - nousresearch
   task_completion_guidance: true
   environment_probe: true
