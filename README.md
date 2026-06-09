@@ -24,6 +24,8 @@ home to no one.
 | **Egress proxy** | Rotating residential exits per connection + a blocklist that refuses telemetry/pricing phone-homes |
 | **Memory** | Off. No persistence, no profiling, no "I remember you across sessions" |
 | **Telemetry** | None. Catalog served locally; update/pricing/analytics calls blocked |
+| **Skills** | Created/installed skills go to `~/.hermes/skills-ghost` -- isolated from your normie `hermes` skills |
+| **Branding** | Forked engine fully debranded -- title banner, ghost figure (👻), and all visible text read **Ghost** |
 
 ## Architecture
 

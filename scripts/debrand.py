@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Scrub user-visible "Hermes" branding from a forked engine tree.
 
-SURGICAL: only replaces display-string phrases a user actually sees. It never touches
-Python identifiers, import paths, the `hermes_cli`/`hermes_constants` package names, the
-`HERMES_HOME` env var, config keys, or `~/.hermes` paths -- so the engine keeps running.
-Scans every .py plus the web UI assets (html/js/css), excluding the venv and caches.
-Idempotent. Run against the forked engine, not the upstream install.
+SURGICAL: only replaces display strings + the two ASCII-art logo constants. It never
+touches Python identifiers, import paths, the `hermes_cli`/`hermes_constants` package
+names, `HERMES_HOME`, config keys, or `~/.hermes` paths -- so the engine keeps running.
+Scans every .py plus the web UI assets, excluding the venv and caches. Idempotent.
 
     python3 debrand.py [ENGINE_DIR]   # default: ~/.ghost-engine
 """
-import os, sys
+import os, re, sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/.ghost-engine")
 
@@ -24,6 +23,26 @@ SUBS = [
     ("Hermes, your", "Ghost, your"),
     ("the Hermes assistant", "the Ghost assistant"),
 ]
+
+# The block-letter title + the figure art (defined as `NAME = """..."""` constants,
+# duplicated across banner.py + cli.py). Variable names kept; only the value swaps.
+GHOST_LOGO = """[bold #FFD700] ██████╗ ██╗  ██╗ ██████╗ ███████╗████████╗[/]
+[bold #FFD700]██╔════╝ ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝[/]
+[#FFBF00]██║  ███╗███████║██║   ██║███████╗   ██║   [/]
+[#FFBF00]██║   ██║██╔══██║██║   ██║╚════██║   ██║   [/]
+[#CD7F32]╚██████╔╝██║  ██║╚██████╔╝███████║   ██║   [/]
+[#CD7F32] ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   [/]"""
+GHOST_ART = """[#FFD700]       ▄▄▄▄▄▄▄▄[/]
+[#FFD700]     ▄████████████▄[/]
+[#FFBF00]    ██████████████[/]
+[#FFBF00]    ███  ████  ███[/]
+[#FFBF00]    ███  ████  ███[/]
+[#FFBF00]    ██████████████[/]
+[#CD7F32]    ██████████████[/]
+[#CD7F32]    ██████████████[/]
+[#CD7F32]    ██▀██▀██▀██▀██[/]"""
+ART_CONSTS = [("HERMES_AGENT_LOGO", GHOST_LOGO), ("HERMES_CADUCEUS", GHOST_ART)]
+
 SKIP_DIRS = {"venv", "__pycache__", "node_modules", ".git"}
 EXTS = (".py", ".html", ".js", ".css", ".md", ".txt")
 
@@ -43,6 +62,10 @@ for dp, dirs, fs in os.walk(ROOT):
             if a in s:
                 subs += s.count(a)
                 s = s.replace(a, b)
+        for name, art in ART_CONSTS:
+            if name + ' = """' in s:
+                s = re.sub(name + r' = """.*?"""',
+                           name + ' = """' + art + '"""', s, count=1, flags=re.DOTALL)
         if s != orig:
             open(p, "w", encoding="utf-8").write(s)
             files += 1

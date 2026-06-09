@@ -34,6 +34,12 @@ find "$ENG"/venv/lib -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null |
 echo "==> debranding the fork"
 "$PYTHON" "$HERE/debrand.py" "$ENG"
 
+echo "==> isolating ghost skills -> \$HERMES_HOME/skills-ghost (separate from normie hermes)"
+for f in tools/skills_hub.py tools/skills_sync.py tools/skills_tool.py tools/skill_manager_tool.py; do
+  LC_ALL=C sed -i '' 's#SKILLS_DIR = HERMES_HOME / "skills"#SKILLS_DIR = HERMES_HOME / "skills-ghost"#' "$ENG/$f" 2>/dev/null || true
+done
+LC_ALL=C sed -i '' 's#/skills/#/skills-ghost/#g' "$ENG/hermes_cli/skills_hub.py" 2>/dev/null || true
+
 echo "==> verifying the fork launches (expect 'Ghost vX.Y')"
 "$ENG/venv/bin/hermes" --version 2>&1 | head -2 || { echo "!! fork failed to launch"; exit 1; }
 echo "==> fork ready: $ENG"
