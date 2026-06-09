@@ -14,9 +14,9 @@ PY=__PYTHON__
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
 EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
 if [ "$HC" = "200" ] && [ -n "$EXIT_IP" ]; then
-  STATUS="👻 ghost incognito · default = local 32B (offline) · hosted models scrubbed + proxied via $EXIT_IP"
+  STATUS="👻 ghost · default = Hermes 405B · scrubbed + proxied via $EXIT_IP · local 32B fallback"
 else
-  STATUS="👻 ghost incognito · default = local 32B (offline, OK) · ⚠️ privacy infra down (scrubber=$HC proxy=${EXIT_IP:-down}); HOSTED models will fail until you restart them"
+  STATUS="👻 ghost · ⚠️ privacy infra DOWN (scrubber=$HC proxy=${EXIT_IP:-down}) -- 405B unreachable, falling back to LOCAL 32B (offline)"
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 echo "$STATUS · $VPN" >&2

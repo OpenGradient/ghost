@@ -1,9 +1,12 @@
 model:
   base_url: https://inference-api.nousresearch.com/v1
-  default: uncensored-local:latest
-  provider: ollama-local
+  default: nousresearch/hermes-4-405b
+  provider: nous
   context_length: 65536
   ollama_num_ctx: 65536
+fallback_model:
+  provider: ollama-local
+  model: uncensored-local:latest
 providers:
   ollama-local:
     base_url: http://localhost:11434/v1
