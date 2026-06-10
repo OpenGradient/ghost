@@ -130,8 +130,8 @@ GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$SRC" bash "$REPO/scripts
 # ---------- 5. the ghost + ghost-login commands ----------
 say "Installing the ghost + ghost-login commands"
 mkdir -p "$HOME/.local/bin"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
 chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login"
 
 # ---------- 6. connect your account (hosted models) ----------

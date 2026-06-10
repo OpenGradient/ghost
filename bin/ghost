@@ -8,8 +8,8 @@
 SCRUBBER="http://127.0.0.1:8788"
 PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
-SENTINEL="$HOME/.ghost/privacy/.pass_paths"
-export HERMES_HOME="$HOME/.ghost"   # ghost's isolated state dir (the engine honors HERMES_HOME)
+SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
+export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine honors HERMES_HOME)
 
 # --paths (or --code): path-aware mode -- let real filesystem paths reach the hosted model
 # for agentic file work; name + secrets in content are still scrubbed. Default off = full redaction.
@@ -17,12 +17,15 @@ PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
 # Are we connected to a hosted account?  (hosted models need `ghost-login`.)
-if "$PY" "$HOME/.ghost/privacy/chat_login.py" --status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
+if "$PY" "__GHOST_HOME__/privacy/chat_login.py" --status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
+
+# Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
+"$PY" "__GHOST_HOME__/privacy/ensure_scrubber_route.py" 2>/dev/null || true
 
 # Is the local OHTTP bridge up?  (it's what carries hosted requests.)
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
 
-if [ -f "$HOME/.ghost/.ghost-direct" ]; then
+if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
   # Direct mode: OHTTP bridge talks to chat-api directly (no Webshare rotation).
   if [ "$HC" = "200" ]; then
     STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP) · $LOGIN · local 32B fallback"

@@ -35,8 +35,8 @@ agent:
   api_max_retries: 3
   service_tier: fast
   tool_use_enforcement: auto
-  task_completion_guidance: true
-  environment_probe: true
+  task_completion_guidance: false
+  environment_probe: false
   environment_hint: ''
   gateway_timeout_warning: 900
   clarify_timeout: 600
@@ -95,7 +95,7 @@ agent:
     uwu: hewwo! i'm your fwiendwy assistant uwu~ i wiww twy my best to hewp you! *nuzzles
       your code* OwO what's this? wet me take a wook! i pwomise to be vewy hewpful
       >w<
-  reasoning_effort: xhigh
+  reasoning_effort: low
   verbose: false
 terminal:
   backend: local
@@ -418,7 +418,7 @@ delegation:
   inherit_mcp_toolsets: true
   max_iterations: 50
   child_timeout_seconds: 600
-  reasoning_effort: ''
+  reasoning_effort: low
   max_concurrent_children: 3
   max_spawn_depth: 1
   orchestrator_enabled: true

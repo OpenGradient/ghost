@@ -8,4 +8,4 @@
 #   ghost-login --paste    paste the token JSON manually (headless / no browser).
 #
 # Override the website with GHOST_CHAT_APP_URL (default https://chat.opengradient.ai).
-exec __PYTHON__ "$HOME/.ghost/privacy/chat_login.py" "$@"
+exec __PYTHON__ "__GHOST_HOME__/privacy/chat_login.py" "$@"

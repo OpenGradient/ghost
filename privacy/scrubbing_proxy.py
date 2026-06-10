@@ -304,6 +304,34 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(CATALOG_BYTES)
             return
+        # Provider-detection probes -- answer LOCALLY so the engine doesn't try to reach a
+        # remote provider just to detect the endpoint type (it fires these per turn). Serving
+        # them instantly keeps per-turn latency down, and the model list stays consistent with
+        # the hosted catalog. Real chat goes through do_POST -> OHTTP -> chat-api TEE gateway.
+        probe = self.path.rstrip("/")
+        if probe in ("/v1/models", "/api/v1/models", "/models"):
+            ml = json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": mid, "object": "model", "owned_by": mid.split("/", 1)[0]}
+                        for mid, _ in _CATALOG_MODELS
+                    ],
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(ml)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(ml)
+            return
+        if probe in ("/api/tags", "/v1/props", "/props", "/version", "/api/version", "/v1/version"):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            return
         self._error(404, "not found")
 
     def do_POST(self):
