@@ -14,6 +14,12 @@ SENTINEL="$HOME/.hermes/privacy/.pass_paths"
 PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
+# Direct mode (GHOST_DIRECT install): no local privacy stack -- skip the gate, run straight.
+if [ -f "$HOME/.hermes/.ghost-direct" ]; then
+  echo "👻 ghost · direct (no local privacy stack) · default = Hermes 405B · local 32B fallback" >&2
+  exec "__ENG__/venv/bin/hermes" -p uncensored "$@"
+fi
+
 # Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
 "$PY" "$HOME/.hermes/privacy/ensure_scrubber_route.py" 2>/dev/null || true
 

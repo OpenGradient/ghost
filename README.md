@@ -102,19 +102,31 @@ and warns (never hard-blocks) if the privacy infra is down -- so the offline pat
 
 ## Install
 
+**One command installs everything** -- [Ollama](https://ollama.com), the
+[Hermes Agent](https://hermes-agent.nousresearch.com) engine, the local models, the forked +
+debranded engine, the privacy stack, and the `ghost` command. Idempotent (safe to re-run):
+
 ```bash
 ./install.sh
 ```
 
-`install.sh` is **self-sufficient and idempotent** -- one run does everything: pulls the local
-models, installs + starts the privacy services (rotating proxy + scrubber), writes the profile,
-**forks + debrands the engine** into `~/.ghost-engine`, **logs you in to Nous Portal** (opens your
-browser, for the default 405B), routes hosted inference through the scrubber, installs the `ghost`
-command, and smoke-tests it. Re-run it any time; it skips what's already done.
+The default is the full private setup: it auto-installs the prerequisites, pulls the local models,
+starts the rotating proxy + PII/secret scrubber, forks + debrands the engine into `~/.ghost-engine`,
+opens the Nous Portal browser login for the default 405B, wires the scrubber routing, installs
+`ghost`, and smoke-tests it.
 
-The only two things it can't install for you are the prerequisites it builds on:
-[Ollama](https://ollama.com) and the [Hermes Agent](https://hermes-agent.nousresearch.com) engine
-that ghost forks. After install, personalize `~/.hermes/privacy/pii_denylist.txt` with your own
+**Config modes (optional env vars):**
+
+```bash
+NOUS_API_KEY=sk-nous-... ./install.sh            # auth 405B with a key, no browser login
+GHOST_DIRECT=1           ./install.sh            # no Webshare proxy/scrubber; talk to Nous directly
+NOUS_API_KEY=sk-... GHOST_DIRECT=1 ./install.sh  # share setup: key + no personal privacy stack
+```
+
+- **`NOUS_API_KEY`** -- non-interactive auth (headless / sharing); uses the engine's `auth add` under the hood.
+- **`GHOST_DIRECT=1`** -- for a machine without your Webshare proxies: skips the local privacy stack, points 405B straight at Nous, and `ghost` skips its privacy gate.
+
+After a default install, personalize `~/.hermes/privacy/pii_denylist.txt` with your own
 name/email/handles so the scrubber redacts them on the hosted path.
 
 ```bash
