@@ -111,6 +111,11 @@ SECRET_RES = [
 ]
 
 PASS_PATHS_SENTINEL = os.path.expanduser("~/.ghost/privacy/.pass_paths")
+# Filesystem paths are protected from redaction by DEFAULT so agentic file work is
+# not blinded: the user's name often appears inside ~/ paths, and redacting it to
+# [REDACTED_PII] breaks path navigation. Names/secrets in prose are still scrubbed.
+# Create ~/.ghost/privacy/.full_redaction to redact paths too (maximum privacy).
+FULL_REDACTION_SENTINEL = os.path.expanduser("~/.ghost/privacy/.full_redaction")
 PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
 
@@ -160,7 +165,7 @@ def scrub_body(obj):
     total = 0
     if not isinstance(obj, dict):
         return obj, 0
-    pp = os.path.exists(PASS_PATHS_SENTINEL)
+    pp = not os.path.exists(FULL_REDACTION_SENTINEL)  # default: protect filesystem paths
     msgs = obj.get("messages")
     if isinstance(msgs, list):
         for m in msgs:

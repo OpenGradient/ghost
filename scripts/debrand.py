@@ -65,6 +65,12 @@ CODE_PATCHES = [
     ("model_switch.py",
      r"return bool\(_NOUS_HERMES_NON_AGENTIC_RE\.search\(model_name\)\)",
      "return False  # ghost: Hermes tool-calling verified via the OpenGradient TEE gateway"),
+    # The agent's terminal must use the user's REAL $HOME so `~` resolves to the real home
+    # dir, not the per-profile ~/.ghost/.../home sandbox. Without this, every ~-relative path
+    # the model runs is wrong and home-dir file tasks fail with "directory doesn't exist".
+    ("hermes_constants.py",
+     r'    profile_home = os\.path\.join\(hermes_home, "home"\)',
+     '    return None  # ghost: agent uses the user\'s real $HOME so ~ resolves correctly\n    profile_home = os.path.join(hermes_home, "home")'),
 ]
 
 SKIP_DIRS = {"venv", "__pycache__", "node_modules", ".git"}
