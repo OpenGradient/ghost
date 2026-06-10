@@ -7,8 +7,8 @@
 SCRUBBER="http://127.0.0.1:8788"
 PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
-SENTINEL="$HOME/.ghost/privacy/.pass_paths"
-export HERMES_HOME="$HOME/.ghost"   # ghost's isolated state dir (the engine honors HERMES_HOME)
+SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
+export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine honors HERMES_HOME)
 
 # --paths (or --code): path-aware mode -- let real filesystem paths reach 405B for agentic
 # file work; name + secrets in content are still scrubbed. Default off = full redaction.
@@ -16,13 +16,13 @@ PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
 # Direct mode (GHOST_DIRECT install): no local privacy stack -- skip the gate, run straight.
-if [ -f "$HOME/.ghost/.ghost-direct" ]; then
+if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
   echo "👻 ghost · direct (no local privacy stack) · default = Hermes 405B · local 32B fallback" >&2
   exec "__ENG__/venv/bin/hermes" -p uncensored "$@"
 fi
 
 # Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
-"$PY" "$HOME/.ghost/privacy/ensure_scrubber_route.py" 2>/dev/null || true
+"$PY" "__GHOST_HOME__/privacy/ensure_scrubber_route.py" 2>/dev/null || true
 
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
 EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)

@@ -149,7 +149,7 @@ if [ -z "$DIRECT" ]; then say "Routing hosted inference through the local scrubb
 # ---------- 7. the ghost command ----------
 say "Installing the ghost command"
 mkdir -p "$HOME/.local/bin"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
 chmod +x "$HOME/.local/bin/ghost"
 
 # ---------- 8. smoke test ----------

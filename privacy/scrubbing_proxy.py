@@ -167,6 +167,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(CATALOG_BYTES)
             return
+        # Provider-detection probes -- answer LOCALLY so they don't crawl through the slow
+        # rotating proxy to Nous (which 404s them). The engine fires these per turn to detect
+        # the endpoint type; serving them fast removes ~12s/turn of latency.
+        probe = path.rstrip("/")
+        if method == "GET" and probe in ("/v1/models", "/api/v1/models", "/models"):
+            ml = json.dumps({"object": "list", "data": [
+                {"id": "nousresearch/hermes-4-405b", "object": "model", "owned_by": "nous"},
+                {"id": "nousresearch/hermes-4-70b", "object": "model", "owned_by": "nous"}]}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(ml))); self.send_header("Connection", "close")
+            self.end_headers(); self.wfile.write(ml); return
+        if method == "GET" and probe in ("/api/tags", "/v1/props", "/props", "/version", "/api/version", "/v1/version"):
+            self.send_response(404); self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close"); self.end_headers(); return
         redactions = 0
         if body and ("chat/completions" in path or path.endswith("/completions")):
             try:
