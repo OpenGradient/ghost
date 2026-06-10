@@ -14,6 +14,28 @@ PII/secret scrubber + a rotating residential proxy.
 
 ---
 
+## Quickstart
+
+One command installs **everything** -- Ollama, the Hermes engine, the local models, the forked +
+debranded engine, the privacy stack, and the `ghost` command. Idempotent (safe to re-run):
+
+```bash
+unzip ghost.zip -d ~/ghost && cd ~/ghost && ./install.sh
+```
+
+Then run **`ghost`**. Default is Hermes 405B (scrubbed + proxied); inside, `/model` drops to the
+fully-local 32B. Optional config via env:
+
+```bash
+NOUS_API_KEY=sk-nous-... ./install.sh             # auth with a key instead of the browser login
+GHOST_DIRECT=1           ./install.sh             # no Webshare proxy/scrubber; talk to Nous directly
+NOUS_API_KEY=sk-... GHOST_DIRECT=1 ./install.sh   # share setup: key + no personal privacy stack
+```
+
+Prerequisites are auto-installed; full details under [Install](#install) below.
+
+---
+
 ## Two modes
 
 ghost runs one of two models, and the difference is a deliberate privacy/capability trade:
