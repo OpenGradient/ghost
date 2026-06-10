@@ -8,7 +8,7 @@ Chain:  Hermes (uncensored profile)  --plaintext localhost-->  THIS (127.0.0.1:8
 Because Hermes talks to us over plaintext localhost, we can read & rewrite the request
 body before it is ever TLS-encrypted to Nous. Result: the model/Nous never receive your
 name, email, phone, etc. TLS to Nous is still validated normally (only the localhost hop
-is plaintext). Edit ~/.hermes/privacy/pii_denylist.txt to add/remove redacted terms.
+is plaintext). Edit ~/.ghost/privacy/pii_denylist.txt to add/remove redacted terms.
 """
 import json, os, re, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,8 +17,8 @@ import httpx
 LISTEN = ("127.0.0.1", 8788)
 UPSTREAM = "https://inference-api.nousresearch.com/v1"
 ROTATING_PROXY = "http://127.0.0.1:8899"          # chain upstream through Webshare rotation
-LOG = os.path.expanduser("~/.hermes/privacy/scrubber.log")
-DENYLIST_FILE = os.path.expanduser("~/.hermes/privacy/pii_denylist.txt")
+LOG = os.path.expanduser("~/.ghost/privacy/scrubber.log")
+DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
 
 # Curated picker whitelist served at /model-catalog.json -- only the 2 uncensored
 # Nous models (both routed through this scrubber + the rotating proxy). Replacing the
@@ -71,7 +71,7 @@ SECRET_RES = [
 
 
 def load_denylist():
-    seed = []  # populate via ~/.hermes/privacy/pii_denylist.txt
+    seed = []  # populate via ~/.ghost/privacy/pii_denylist.txt
     try:
         with open(DENYLIST_FILE) as f:
             for ln in f:
@@ -89,7 +89,7 @@ DENY = [(t, re.compile(re.escape(t), re.IGNORECASE)) for t in load_denylist()]
 # Path-aware mode: when this sentinel exists (set by `ghost --paths` for one session),
 # filesystem paths are protected from redaction so 405B can do agentic file work. Default
 # absent = full redaction. Name/secrets in prose are always scrubbed either way.
-PASS_PATHS_SENTINEL = os.path.expanduser("~/.hermes/privacy/.pass_paths")
+PASS_PATHS_SENTINEL = os.path.expanduser("~/.ghost/privacy/.pass_paths")
 PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
 

@@ -13,9 +13,10 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-PROFILE="$HERMES_HOME/profiles/uncensored"
-PRIV="$HERMES_HOME/privacy"
+ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
+GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth) -- separate from a normie hermes
+PROFILE="$GHOST_HOME/profiles/uncensored"
+PRIV="$GHOST_HOME/privacy"
 LA="$HOME/Library/LaunchAgents"
 ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-$(command -v python3 || true)}"
@@ -36,12 +37,12 @@ if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; b
 have ollama || { echo "!! Install Ollama from https://ollama.com then re-run."; exit 1; }
 pgrep -xq ollama || open -a Ollama 2>/dev/null || true ; sleep 1
 
-if [ ! -d "$HERMES_HOME/hermes-agent" ] && ! have hermes; then
+if [ ! -d "$ENGINE_HOME/hermes-agent" ] && ! have hermes; then
   say "Installing the Hermes Agent engine (official one-liner)"
   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash \
     || { echo "!! engine install failed; install manually (https://hermes-agent.nousresearch.com) then re-run."; exit 1; }
 fi
-SRC="$HERMES_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(command -v hermes)")/.." 2>/dev/null && pwd)"
+SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(command -v hermes)")/.." 2>/dev/null && pwd)"
 [ -d "$SRC" ] || { echo "!! can't locate the Hermes engine to fork."; exit 1; }
 
 "$PYTHON" -c "import httpx" 2>/dev/null || { echo "   installing httpx (scrubber dep)"; "$PYTHON" -m pip install -q httpx; }
@@ -74,10 +75,10 @@ if [ -z "$DIRECT" ]; then
   cp "$REPO"/privacy/*.py "$PRIV/"
   [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
   cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
-  if [ ! -s "$HERMES_HOME/webshare_proxies.txt" ]; then
+  if [ ! -s "$GHOST_HOME/webshare_proxies.txt" ]; then
     echo "   Paste your Webshare proxy-list download URL (ip:port:user:pass), or Enter to skip:"
     read -r WS_URL || true
-    [ -n "${WS_URL:-}" ] && curl -fsSL "$WS_URL" -o "$HERMES_HOME/webshare_proxies.txt" && echo "   $(wc -l <"$HERMES_HOME/webshare_proxies.txt"|tr -d ' ') proxies"
+    [ -n "${WS_URL:-}" ] && curl -fsSL "$WS_URL" -o "$GHOST_HOME/webshare_proxies.txt" && echo "   $(wc -l <"$GHOST_HOME/webshare_proxies.txt"|tr -d ' ') proxies"
   fi
   mkdir -p "$LA"
   for svc in hermes-proxy hermes-pii-scrubber; do
@@ -87,13 +88,13 @@ if [ -z "$DIRECT" ]; then
   done
   printf "   waiting for scrubber"
   for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$SCRUBBER/healthz" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up"
-  rm -f "$HERMES_HOME/.ghost-direct"
+  rm -f "$GHOST_HOME/.ghost-direct"
 else
   say "GHOST_DIRECT set -- skipping proxy + scrubber; ghost will talk to Nous directly"
   sed -i '' -E '/^(HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|DDGS_PROXY|NOUS_INFERENCE_BASE_URL)=/d' "$PROFILE/.env" 2>/dev/null || true
   # the model catalog is served by the (absent) scrubber -- disable it so the picker doesn't hang
   "$PYTHON" -c "p='$PROFILE/config.yaml';s=open(p).read();open(p,'w').write(s.replace('model_catalog:\n  enabled: true','model_catalog:\n  enabled: false'))" 2>/dev/null || true
-  : > "$HERMES_HOME/.ghost-direct"   # marker -> the `ghost` launcher skips its privacy gate
+  : > "$GHOST_HOME/.ghost-direct"   # marker -> the `ghost` launcher skips its privacy gate
 fi
 
 # ---------- 4. fork + debrand the engine ----------
@@ -103,7 +104,7 @@ ENGINE="$ENG/venv/bin/hermes"
 
 # ---------- 5. Nous auth: API key (non-interactive) or browser OAuth ----------
 say "Nous Portal auth (the default 405B model)"
-if ! have_nous && [ -f "$HERMES_HOME/auth.json" ]; then cp "$HERMES_HOME/auth.json" "$PROFILE/auth.json"; fi
+if ! have_nous && [ -f "$ENGINE_HOME/auth.json" ]; then cp "$ENGINE_HOME/auth.json" "$PROFILE/auth.json"; fi  # reuse a normie hermes login
 if [ -n "$NOUS_API_KEY" ]; then
   echo "   wiring the API key as a custom OpenAI-compatible provider (inference: $INFER_URL)"
   "$PYTHON" - "$PROFILE/config.yaml" "$NOUS_API_KEY" "$INFER_URL" <<'PYEOF'
@@ -121,8 +122,8 @@ print("   nous-key provider wired")
 PYEOF
 elif ! have_nous; then
   echo "   opening Nous Portal browser login (sign in to enable 405B)..."
-  HERMES_HOME="$HERMES_HOME" "$ENGINE" -p uncensored portal login || true
-  if ! have_nous && [ -f "$HERMES_HOME/auth.json" ]; then cp "$HERMES_HOME/auth.json" "$PROFILE/auth.json"; fi
+  HERMES_HOME="$GHOST_HOME" "$ENGINE" -p uncensored portal login || true
+  if ! have_nous && [ -f "$GHOST_HOME/auth.json" ]; then cp "$GHOST_HOME/auth.json" "$PROFILE/auth.json"; fi
 fi
 have_nous && echo "   Nous: authenticated" || echo "   Nous: not set -- ghost will use the local 32B until you authenticate"
 

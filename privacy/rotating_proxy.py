@@ -12,8 +12,8 @@ Run via launchd (com.advait.hermes-proxy) so it persists across sessions.
 import asyncio, base64, os, random, time
 from urllib.parse import urlparse
 
-PROXY_FILE = os.path.expanduser("~/.hermes/webshare_proxies.txt")
-LOG_FILE   = os.path.expanduser("~/.hermes/privacy/proxy.log")
+PROXY_FILE = os.path.expanduser("~/.ghost/webshare_proxies.txt")
+LOG_FILE   = os.path.expanduser("~/.ghost/privacy/proxy.log")
 LISTEN_HOST, LISTEN_PORT = "127.0.0.1", 8899
 MAX_TRIES, CONN_TIMEOUT = 4, 12
 # Incognito blocklist: hosts the harness phones home to that we refuse (anonymous pricing

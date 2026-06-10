@@ -5,7 +5,7 @@ back to the real Nous URL (silently routing around the scrubber and leaking PII)
 the hermes-uncensored wrapper runs this before every launch to self-heal."""
 import json, os
 
-AUTH = os.path.expanduser("~/.hermes/profiles/uncensored/auth.json")
+AUTH = os.path.expanduser("~/.ghost/profiles/uncensored/auth.json")
 SCRUBBER = "http://127.0.0.1:8788/v1"
 
 try:

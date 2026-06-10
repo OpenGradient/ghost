@@ -413,7 +413,7 @@ delegation:
   max_spawn_depth: 1
   orchestrator_enabled: true
   subagent_auto_approve: false
-prefill_messages_file: __HOME__/.hermes/privacy/uncensored_prefill.json
+prefill_messages_file: __HOME__/.ghost/privacy/uncensored_prefill.json
 goals:
   max_turns: 20
 skills:

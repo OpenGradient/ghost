@@ -66,7 +66,7 @@ The default is 405B because it is the stronger agent; the privacy path (below) m
 | **Egress proxy** | Rotating residential exit per connection + a blocklist that refuses telemetry/pricing phone-homes (e.g. openrouter.ai) |
 | **Memory** | Off. No persistence, no profiling, no "I remember you across sessions" |
 | **Telemetry** | None. Catalog served locally; update/pricing/analytics calls blocked; brightdata + codex MCPs removed; TTS local (piper) |
-| **Skills** | Created/installed skills go to `~/.hermes/skills-ghost` -- isolated from your normie `hermes` skills |
+| **Skills** | Created/installed skills go to `~/.ghost/skills-ghost` -- isolated from your normie `hermes` skills |
 | **Branding** | Forked engine fully debranded -- **GHOST** title banner, 👻 figure, and all visible text read Ghost |
 
 ---
@@ -148,7 +148,7 @@ NOUS_API_KEY=sk-... GHOST_DIRECT=1 ./install.sh  # share setup: key + no persona
 - **`NOUS_API_KEY`** -- non-interactive auth (headless / sharing); uses the engine's `auth add` under the hood.
 - **`GHOST_DIRECT=1`** -- for a machine without your Webshare proxies: skips the local privacy stack, points 405B straight at Nous, and `ghost` skips its privacy gate.
 
-After a default install, personalize `~/.hermes/privacy/pii_denylist.txt` with your own
+After a default install, personalize `~/.ghost/privacy/pii_denylist.txt` with your own
 name/email/handles so the scrubber redacts them on the hosted path.
 
 ```bash

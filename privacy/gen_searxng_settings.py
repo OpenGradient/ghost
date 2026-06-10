@@ -5,11 +5,11 @@ SearXNG routes its OWN upstream engine requests through the rotating Webshare
 proxies (round-robin over the list), so a private query never touches BrightData
 or Nous -- only the search engines see it, and they see a Webshare IP. JSON API
 is enabled (Hermes' searxng backend needs it) and the bot limiter is off (local
-single-user). Re-run this whenever ~/.hermes/webshare_proxies.txt changes."""
+single-user). Re-run this whenever ~/.ghost/webshare_proxies.txt changes."""
 import os, secrets
 
-PROXIES = os.path.expanduser("~/.hermes/webshare_proxies.txt")
-OUT_DIR = os.path.expanduser("~/.hermes/privacy/searxng")
+PROXIES = os.path.expanduser("~/.ghost/webshare_proxies.txt")
+OUT_DIR = os.path.expanduser("~/.ghost/privacy/searxng")
 OUT = os.path.join(OUT_DIR, "settings.yml")
 
 proxies = []
