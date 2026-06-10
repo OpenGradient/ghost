@@ -142,7 +142,7 @@ else
   echo "   Hosted models (the default Hermes 405B + Claude/GPT/Gemini/Grok) need a one-time login."
   if [ -t 0 ]; then
     printf "   Run the browser login now? [Y/n] "; read -r ANS || true
-    case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) GHOST_CHAT_APP_URL="${GHOST_CHAT_APP_URL:-}" "$PYTHON" "$PRIV/chat_login.py" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac
+    case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) "$PYTHON" "$PRIV/chat_login.py" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac
   else
     echo "   Non-interactive install -- run 'ghost-login' once you're done."
   fi

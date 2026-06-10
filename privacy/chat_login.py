@@ -31,7 +31,9 @@ DEFAULT_CHAT_APP_URL = "https://chat.opengradient.ai"
 
 
 def _website_url() -> str:
-    return os.environ.get("GHOST_CHAT_APP_URL", DEFAULT_CHAT_APP_URL).rstrip("/")
+    # `or` (not get's default) so an env var set to an empty string still falls
+    # back to the default -- install.sh passes GHOST_CHAT_APP_URL="" when unset.
+    return (os.environ.get("GHOST_CHAT_APP_URL") or DEFAULT_CHAT_APP_URL).rstrip("/")
 
 
 def _valid_bundle(data: object) -> bool:
