@@ -287,7 +287,7 @@ auxiliary:
     timeout: 30
 display:
   compact: false
-  personality: helpful
+  personality: uncensored_simple
   resume_display: full
   resume_exchanges: 10
   resume_max_user_chars: 300
