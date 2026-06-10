@@ -1,13 +1,23 @@
 model:
-  base_url: https://inference-api.nousresearch.com/v1
-  default: nousresearch/hermes-4-405b
-  provider: nous
+  base_url: http://127.0.0.1:8788/v1
+  default: nous/hermes-4-405b
+  provider: opengradient
   context_length: 65536
   ollama_num_ctx: 65536
 fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
 providers:
+  # Hosted models run through ghost's local OHTTP bridge (scrubbing_proxy.py),
+  # which PII-scrubs then OHTTP-encrypts each request to the OpenGradient
+  # chat-api TEE gateway -- the same private path the chat.opengradient.ai
+  # website uses. The api_key here is a placeholder: the bridge injects the real
+  # Supabase bearer (from `ghost-login`) itself and ignores this value.
+  opengradient:
+    base_url: http://127.0.0.1:8788/v1
+    api_key: ohttp-bearer-managed-by-ghost-bridge
+    default_model: nous/hermes-4-405b
+    context_length: 65536
   ollama-local:
     base_url: http://localhost:11434/v1
     api_key: ollama

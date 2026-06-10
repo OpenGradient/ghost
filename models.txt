@@ -1,7 +1,7 @@
 # ghost local models.   columns:  <ollama-source>  <alias>  <required|optional>
 #
 # ghost-tool (7B) is REQUIRED -- runs the 12 auxiliary tasks AND serves as the local chat
-#   fallback when the hosted 405B is unreachable. Small (~6GB).
+#   fallback when the hosted TEE gateway is unreachable. Small (~6GB).
 # uncensored-local (32B) is OPTIONAL -- a stronger local chat / true-incognito model, but 26GB.
 #   Include it with:   GHOST_LOCAL_32B=1 ./install.sh
 #

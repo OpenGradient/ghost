@@ -1,0 +1,11 @@
+#!/bin/sh
+# ghost-login -- connect ghost to your OpenGradient Chat account for hosted models.
+#
+#   ghost-login            browser login: opens the website, hands a session token back
+#                          to this machine, and stores it for the OHTTP bridge to use.
+#   ghost-login --status   show whether you're connected (and as whom).
+#   ghost-login --logout   forget the stored session.
+#   ghost-login --paste    paste the token JSON manually (headless / no browser).
+#
+# Override the website with GHOST_CHAT_APP_URL (default https://chat.opengradient.ai).
+exec __PYTHON__ "$HOME/.ghost/privacy/chat_login.py" "$@"
