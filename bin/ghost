@@ -1,39 +1,49 @@
 #!/bin/sh
 # ghost -- incognito agentic harness launcher (profile: uncensored).
-#   Default model: LOCAL 32B abliterated (uncensored-local) -- fully offline, nothing leaves the box.
-#   Optional hosted via /model: hermes-4-405b / hermes-4-70b -> PII scrubber (8788)
-#     -> rotating Webshare proxy (8899) -> Nous.   Auxiliary tasks run on the local 7B (ghost-tool).
-# Warns (never hard-blocks) if the privacy infra is down, so the offline default still runs.
+#   Default model: hosted nous/hermes-4-405b, reached through ghost's local OHTTP bridge
+#     (127.0.0.1:8788) -> PII scrubber -> chat-api TEE gateway (oblivious-HTTP + enclave).
+#   On-demand via /model: drops to the fully-local 32B/7B (true incognito, nothing leaves).
+# Warns (never hard-blocks) if the privacy infra is down or you're not logged in, so the
+# offline local model still runs.
 SCRUBBER="http://127.0.0.1:8788"
 PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
 SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
 export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine honors HERMES_HOME)
 
-# --paths (or --code): path-aware mode -- let real filesystem paths reach 405B for agentic
-# file work; name + secrets in content are still scrubbed. Default off = full redaction.
+# --paths (or --code): path-aware mode -- let real filesystem paths reach the hosted model
+# for agentic file work; name + secrets in content are still scrubbed. Default off = full redaction.
 PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
-# Direct mode (GHOST_DIRECT install): no local privacy stack -- skip the gate, run straight.
-if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
-  echo "👻 ghost · direct (no local privacy stack) · default = Hermes 405B · local 32B fallback" >&2
-  exec "__ENG__/venv/bin/hermes" -p uncensored "$@"
-fi
+# Are we connected to a hosted account?  (hosted models need `ghost-login`.)
+if "$PY" "__GHOST_HOME__/privacy/chat_login.py" --status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
 
 # Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
 "$PY" "__GHOST_HOME__/privacy/ensure_scrubber_route.py" 2>/dev/null || true
 
+# Is the local OHTTP bridge up?  (it's what carries hosted requests.)
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
-EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-if [ "$HC" = "200" ] && [ -n "$EXIT_IP" ]; then
-  STATUS="👻 ghost · default = Hermes 405B · scrubbed + proxied via $EXIT_IP · local 32B fallback"
+
+if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
+  # Direct mode: OHTTP bridge talks to chat-api directly (no Webshare rotation).
+  if [ "$HC" = "200" ]; then
+    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP) · $LOGIN · local 32B fallback"
+  else
+    STATUS="👻 ghost · ⚠️ OHTTP bridge DOWN (scrubber=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
+  fi
 else
-  STATUS="👻 ghost · ⚠️ privacy infra DOWN (scrubber=$HC proxy=${EXIT_IP:-down}) -- 405B unreachable, falling back to LOCAL 32B (offline)"
+  EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
+  if [ "$HC" = "200" ] && [ -n "$EXIT_IP" ]; then
+    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · relayed via $EXIT_IP · $LOGIN · local 32B fallback"
+  else
+    STATUS="👻 ghost · ⚠️ privacy infra DOWN (bridge=$HC proxy=${EXIT_IP:-down}) -- hosted unreachable, falling back to LOCAL 32B (offline)"
+  fi
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
-[ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to 405B)"
+[ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
 echo "$STATUS · $VPN" >&2
+
 HB="__ENG__/venv/bin/hermes"
 if [ -n "$PASS_PATHS" ]; then
   : > "$SENTINEL"

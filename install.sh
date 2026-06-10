@@ -4,17 +4,25 @@
 #   ./install.sh
 #
 # Installs EVERYTHING, idempotently (safe to re-run): Ollama, the Hermes engine, the local
-# uncensored models, the forked + debranded engine, the privacy stack, and the `ghost` command.
+# uncensored models, the forked + debranded engine, the privacy stack, and the `ghost` +
+# `ghost-login` commands.
+#
+# Hosted (non-local) models run through ghost's local OHTTP bridge to the OpenGradient
+# chat-api TEE gateway -- the same oblivious-HTTP + enclave path the chat.opengradient.ai
+# website uses. After install, run `ghost-login` once to connect your account (a browser
+# login that hands a session token back to your machine).
 #
 # Optional config via env (all optional -- plain `./install.sh` does the full private setup):
-#   NOUS_API_KEY=sk-nous-...   authenticate the default 405B with a key (no browser login)
-#   GHOST_DIRECT=1             skip the Webshare proxy + PII scrubber and talk to Nous directly
-#                              (for a machine without your personal privacy stack, e.g. sharing)
+#   GHOST_DIRECT=1       skip the Webshare rotating proxy + personal PII denylist; the OHTTP
+#                        bridge still runs and talks to chat-api directly (for a shared box)
+#   GHOST_NO_LOCAL=1     skip Ollama + all local models (hosted-only, lightest)
+#   GHOST_LOCAL_32B=1    also pull the stronger 32B local model (26GB)
+#   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
-GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth) -- separate from a normie hermes
+GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
 PROFILE="$GHOST_HOME/profiles/uncensored"
 PRIV="$GHOST_HOME/privacy"
 LA="$HOME/Library/LaunchAgents"
@@ -22,13 +30,10 @@ ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-$(command -v python3 || true)}"
 SCRUBBER="http://127.0.0.1:8788"
 DIRECT="${GHOST_DIRECT:-}"
-NOUS_API_KEY="${NOUS_API_KEY:-}"
-NO_LOCAL="${GHOST_NO_LOCAL:-}"   # skip Ollama + all local models (hosted 405B/70B only)
-if [ -n "$DIRECT" ]; then INFER_URL="https://inference-api.nousresearch.com/v1"; else INFER_URL="$SCRUBBER/v1"; fi
+NO_LOCAL="${GHOST_NO_LOCAL:-}"   # skip Ollama + all local models (hosted-only)
 
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
-have_nous(){ "$PYTHON" -c "import json,sys;n=json.load(open('$PROFILE/auth.json')).get('providers',{}).get('nous',{});sys.exit(0 if (n.get('access_token') or n.get('api_key')) else 1)" 2>/dev/null; }
 
 # ---------- 0. dependencies (auto-installed) ----------
 say "Dependencies"
@@ -48,9 +53,13 @@ fi
 SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(command -v hermes)")/.." 2>/dev/null && pwd)"
 [ -d "$SRC" ] || { echo "!! can't locate the Hermes engine to fork."; exit 1; }
 
-"$PYTHON" -c "import httpx" 2>/dev/null || { echo "   installing httpx (scrubber dep)"; "$PYTHON" -m pip install -q httpx; }
+# Privacy-stack deps for the OHTTP bridge: httpx (HTTP), cryptography (HPKE +
+# RSA-PSS verify), web3 (on-chain TEE registry read + keccak).
+say "Privacy-stack Python deps (httpx, cryptography, web3)"
+"$PYTHON" -c "import httpx, cryptography, web3" 2>/dev/null \
+  || "$PYTHON" -m pip install -q --upgrade httpx cryptography web3
 
-# ---------- 1. local models (skipped entirely with GHOST_NO_LOCAL; 32B optional via GHOST_LOCAL_32B) ----------
+# ---------- 1. local models (skipped with GHOST_NO_LOCAL; 32B optional via GHOST_LOCAL_32B) ----------
 LOCAL_MODEL="ghost-tool:latest"
 if [ -n "$NO_LOCAL" ]; then
   say "GHOST_NO_LOCAL -- skipping Ollama + all local models (hosted-only)"
@@ -64,7 +73,6 @@ else
     if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"; continue; fi
     echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"
   done < "$REPO/models.txt"
-  # the local chat/fallback model: 32B if present, else the 7B tool model
   if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
   echo "   local model = $LOCAL_MODEL"
 fi
@@ -75,88 +83,78 @@ mkdir -p "$PROFILE"
 sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
-if [ -n "$NO_LOCAL" ]; then   # no local model -> route auxiliary + fallback to the hosted 70B
+if [ -n "$NO_LOCAL" ]; then   # no local model -> route auxiliary + fallback to a hosted model via the OHTTP bridge
   "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
 import sys, re
 p = sys.argv[1]; s = open(p).read()
 s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
-           r"provider: nous\n\1model: nousresearch/hermes-4-70b", s)
-open(p, "w").write(s); print("   no-local: auxiliary + fallback routed to hosted hermes-4-70b")
+           r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
+open(p, "w").write(s); print("   no-local: auxiliary + fallback routed to hosted nous/hermes-4-70b (via OHTTP bridge)")
 PYEOF
 fi
 
-# ---------- 3. privacy stack (skipped with GHOST_DIRECT) ----------
+# ---------- 3. privacy stack (OHTTP bridge always; rotating proxy unless GHOST_DIRECT) ----------
+say "Privacy stack (OHTTP bridge + PII/secret scrubber + rotating proxy)"
+mkdir -p "$PRIV/searxng"
+cp "$REPO"/privacy/*.py "$PRIV/"
+[ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
+cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
+mkdir -p "$LA"
+
 if [ -z "$DIRECT" ]; then
-  say "Privacy stack (rotating proxy + PII/secret scrubber)"
-  mkdir -p "$PRIV/searxng"
-  cp "$REPO"/privacy/*.py "$PRIV/"
-  [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
-  cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
   if [ ! -s "$GHOST_HOME/webshare_proxies.txt" ]; then
     echo "   Paste your Webshare proxy-list download URL (ip:port:user:pass), or Enter to skip:"
     read -r WS_URL || true
     [ -n "${WS_URL:-}" ] && curl -fsSL "$WS_URL" -o "$GHOST_HOME/webshare_proxies.txt" && echo "   $(wc -l <"$GHOST_HOME/webshare_proxies.txt"|tr -d ' ') proxies"
   fi
-  mkdir -p "$LA"
-  for svc in hermes-proxy hermes-pii-scrubber; do
-    sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
-    launchctl unload "$LA/com.advait.$svc.plist" 2>/dev/null || true
-    launchctl load -w "$LA/com.advait.$svc.plist"
-  done
-  printf "   waiting for scrubber"
-  for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$SCRUBBER/healthz" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up"
   rm -f "$GHOST_HOME/.ghost-direct"
+  SERVICES="hermes-proxy hermes-pii-scrubber"
 else
-  say "GHOST_DIRECT set -- skipping proxy + scrubber; ghost will talk to Nous directly"
-  sed -i '' -E '/^(HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|DDGS_PROXY|NOUS_INFERENCE_BASE_URL)=/d' "$PROFILE/.env" 2>/dev/null || true
-  # the model catalog is served by the (absent) scrubber -- disable it so the picker doesn't hang
-  "$PYTHON" -c "p='$PROFILE/config.yaml';s=open(p).read();open(p,'w').write(s.replace('model_catalog:\n  enabled: true','model_catalog:\n  enabled: false'))" 2>/dev/null || true
-  : > "$GHOST_HOME/.ghost-direct"   # marker -> the `ghost` launcher skips its privacy gate
+  say "GHOST_DIRECT set -- the OHTTP bridge will talk to chat-api directly (no Webshare rotation, no personal denylist)"
+  : > "$GHOST_HOME/.ghost-direct"   # marker -> the bridge skips the rotating proxy
+  SERVICES="hermes-pii-scrubber"
 fi
+
+for svc in $SERVICES; do
+  sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
+  launchctl unload "$LA/com.advait.$svc.plist" 2>/dev/null || true
+  launchctl load -w "$LA/com.advait.$svc.plist"
+done
+printf "   waiting for the OHTTP bridge"
+for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$SCRUBBER/healthz" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up"
 
 # ---------- 4. fork + debrand the engine ----------
 say "Forking + debranding the engine -> $ENG"
 GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$SRC" bash "$REPO/scripts/fork-engine.sh"
-ENGINE="$ENG/venv/bin/hermes"
 
-# ---------- 5. Nous auth: API key (non-interactive) or browser OAuth ----------
-say "Nous Portal auth (the default 405B model)"
-if ! have_nous && [ -f "$ENGINE_HOME/auth.json" ]; then cp "$ENGINE_HOME/auth.json" "$PROFILE/auth.json"; fi  # reuse a normie hermes login
-if [ -n "$NOUS_API_KEY" ]; then
-  echo "   wiring the API key as a custom OpenAI-compatible provider (inference: $INFER_URL)"
-  "$PYTHON" - "$PROFILE/config.yaml" "$NOUS_API_KEY" "$INFER_URL" <<'PYEOF'
-import sys
-p, key, url = sys.argv[1], sys.argv[2], sys.argv[3]
-s = open(p).read()
-s = s.replace("provider: nous\n", "provider: nous-key\n")  # default + (no-local) auxiliary all use the key
-if "\n  nous-key:" not in s:
-    s = s.replace("providers:\n  ollama-local:",
-        "providers:\n  nous-key:\n    base_url: " + url + "\n    api_key: " + key +
-        "\n    default_model: nousresearch/hermes-4-405b\n    context_length: 65536\n  ollama-local:")
-open(p, "w").write(s)
-print("   nous-key provider wired")
-PYEOF
-elif ! have_nous; then
-  echo "   opening Nous Portal browser login (sign in to enable 405B)..."
-  HERMES_HOME="$GHOST_HOME" "$ENGINE" -p uncensored portal login || true
-  if ! have_nous && [ -f "$GHOST_HOME/auth.json" ]; then cp "$GHOST_HOME/auth.json" "$PROFILE/auth.json"; fi
-fi
-have_nous && echo "   Nous: authenticated" || echo "   Nous: not set -- ghost will use the local 32B until you authenticate"
-
-# ---------- 6. route hosted inference through the scrubber (privacy mode only) ----------
-if [ -z "$DIRECT" ]; then say "Routing hosted inference through the local scrubber"; "$PYTHON" "$PRIV/ensure_scrubber_route.py" || true; fi
-
-# ---------- 7. the ghost command ----------
-say "Installing the ghost command"
+# ---------- 5. the ghost + ghost-login commands ----------
+say "Installing the ghost + ghost-login commands"
 mkdir -p "$HOME/.local/bin"
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
-chmod +x "$HOME/.local/bin/ghost"
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
+chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login"
 
-# ---------- 8. smoke test ----------
+# ---------- 6. connect your account (hosted models) ----------
+say "Connect your OpenGradient Chat account (for hosted models)"
+if "$PYTHON" "$PRIV/chat_login.py" --status >/dev/null 2>&1; then
+  echo "   already connected: $("$PYTHON" "$PRIV/chat_login.py" --status)"
+else
+  echo "   Hosted models (the default Hermes 405B + Claude/GPT/Gemini/Grok) need a one-time login."
+  if [ -t 0 ]; then
+    printf "   Run the browser login now? [Y/n] "; read -r ANS || true
+    case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) "$PYTHON" "$PRIV/chat_login.py" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac
+  else
+    echo "   Non-interactive install -- run 'ghost-login' once you're done."
+  fi
+fi
+
+# ---------- 7. smoke test ----------
 say "Smoke test"
 "$HOME/.local/bin/ghost" --yolo -z "Reply with one word: hi" 2>&1 | tail -2 || true
 
 say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Default = Hermes 405B; inside ghost, /model switches to the local 32B (true incognito)."
+echo "   Hosted default = nous/hermes-4-405b via the OpenGradient TEE gateway (OHTTP-private)."
+echo "   Inside ghost, /model switches between hosted models and the local 32B (true incognito)."
 [ -z "$DIRECT" ] && echo "   Personalize $PRIV/pii_denylist.txt with your name/email/handles for the hosted-path scrubber."
+echo "   Not connected yet? Run:  ghost-login"
