@@ -46,18 +46,24 @@ SRC="$HERMES_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(comman
 
 "$PYTHON" -c "import httpx" 2>/dev/null || { echo "   installing httpx (scrubber dep)"; "$PYTHON" -m pip install -q httpx; }
 
-# ---------- 1. local models ----------
-say "Local models (skips any already present)"
-while IFS=$'\t' read -r src alias; do
+# ---------- 1. local models (7B required; 32B optional via GHOST_LOCAL_32B) ----------
+say "Local models"
+while IFS=$'\t' read -r src alias opt; do
   case "$src" in \#*|"") continue;; esac
+  if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
+    echo "   skipping optional $alias (26GB) -- set GHOST_LOCAL_32B=1 to include the stronger local model"; continue
+  fi
   if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"; continue; fi
   echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"
 done < "$REPO/models.txt"
+# the local chat/fallback model: 32B if present, else the 7B tool model
+if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
+echo "   local model = $LOCAL_MODEL"
 
 # ---------- 2. uncensored profile ----------
 say "Writing the uncensored profile"
 mkdir -p "$PROFILE"
-sed "s#__HOME__#$HOME#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
+sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
 

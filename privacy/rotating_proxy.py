@@ -18,7 +18,7 @@ LISTEN_HOST, LISTEN_PORT = "127.0.0.1", 8899
 MAX_TRIES, CONN_TIMEOUT = 4, 12
 # Incognito blocklist: hosts the harness phones home to that we refuse (anonymous pricing
 # lookups, telemetry, update checks). CONNECT to these returns 403 and Hermes falls back.
-BLOCKLIST = {"openrouter.ai"}
+BLOCKLIST = {"openrouter.ai", "firecrawl-gateway.nousresearch.com"}
 
 
 def load_proxies():

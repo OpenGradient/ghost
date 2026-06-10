@@ -1,3 +1,10 @@
-# ghost local models — `ollama pull <src>` then `ollama cp <src> <alias>`
-hf.co/zetasepic/Qwen2.5-32B-Instruct-abliterated-v2-GGUF:Q6_K	uncensored-local
-hf.co/mradermacher/Qwen2.5-7B-Instruct-abliterated-v2-GGUF:Q6_K	ghost-tool
+# ghost local models.   columns:  <ollama-source>  <alias>  <required|optional>
+#
+# ghost-tool (7B) is REQUIRED -- runs the 12 auxiliary tasks AND serves as the local chat
+#   fallback when the hosted 405B is unreachable. Small (~6GB).
+# uncensored-local (32B) is OPTIONAL -- a stronger local chat / true-incognito model, but 26GB.
+#   Include it with:   GHOST_LOCAL_32B=1 ./install.sh
+#
+# When the 32B is present it becomes the local default/fallback; otherwise ghost-tool (7B) is.
+hf.co/mradermacher/Qwen2.5-7B-Instruct-abliterated-v2-GGUF:Q6_K	ghost-tool	required
+hf.co/zetasepic/Qwen2.5-32B-Instruct-abliterated-v2-GGUF:Q6_K	uncensored-local	optional
