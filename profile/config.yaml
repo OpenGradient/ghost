@@ -113,7 +113,7 @@ terminal:
   lifetime_seconds: 300
   vercel_runtime: node24
 web:
-  backend: firecrawl
+  backend: ddgs
   search_backend: ddgs
   extract_backend: ''
   use_gateway: false
