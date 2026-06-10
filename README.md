@@ -29,6 +29,8 @@ fully-local 32B. Optional config via env:
 ```bash
 NOUS_API_KEY=sk-nous-... ./install.sh             # auth with a key instead of the browser login
 GHOST_DIRECT=1           ./install.sh             # no Webshare proxy/scrubber; talk to Nous directly
+GHOST_NO_LOCAL=1         ./install.sh             # hosted-only: no Ollama, no local models (lightest)
+GHOST_LOCAL_32B=1        ./install.sh             # also pull the stronger 32B local model (26GB)
 NOUS_API_KEY=sk-... GHOST_DIRECT=1 ./install.sh   # share setup: key + no personal privacy stack
 ```
 

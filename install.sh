@@ -23,6 +23,7 @@ PYTHON="${GHOST_PYTHON:-$(command -v python3 || true)}"
 SCRUBBER="http://127.0.0.1:8788"
 DIRECT="${GHOST_DIRECT:-}"
 NOUS_API_KEY="${NOUS_API_KEY:-}"
+NO_LOCAL="${GHOST_NO_LOCAL:-}"   # skip Ollama + all local models (hosted 405B/70B only)
 if [ -n "$DIRECT" ]; then INFER_URL="https://inference-api.nousresearch.com/v1"; else INFER_URL="$SCRUBBER/v1"; fi
 
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
@@ -33,9 +34,11 @@ have_nous(){ "$PYTHON" -c "import json,sys;n=json.load(open('$PROFILE/auth.json'
 say "Dependencies"
 [ -n "$PYTHON" ] || { echo "!! need python3 (3.11+); install it and re-run."; exit 1; }
 
-if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
-have ollama || { echo "!! Install Ollama from https://ollama.com then re-run."; exit 1; }
-pgrep -xq ollama || open -a Ollama 2>/dev/null || true ; sleep 1
+if [ -z "$NO_LOCAL" ]; then
+  if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
+  have ollama || { echo "!! Install Ollama from https://ollama.com (or set GHOST_NO_LOCAL=1 for hosted-only) then re-run."; exit 1; }
+  pgrep -xq ollama || open -a Ollama 2>/dev/null || true ; sleep 1
+fi
 
 if [ ! -d "$ENGINE_HOME/hermes-agent" ] && ! have hermes; then
   say "Installing the Hermes Agent engine (official one-liner)"
@@ -47,19 +50,24 @@ SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(comman
 
 "$PYTHON" -c "import httpx" 2>/dev/null || { echo "   installing httpx (scrubber dep)"; "$PYTHON" -m pip install -q httpx; }
 
-# ---------- 1. local models (7B required; 32B optional via GHOST_LOCAL_32B) ----------
-say "Local models"
-while IFS=$'\t' read -r src alias opt; do
-  case "$src" in \#*|"") continue;; esac
-  if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
-    echo "   skipping optional $alias (26GB) -- set GHOST_LOCAL_32B=1 to include the stronger local model"; continue
-  fi
-  if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"; continue; fi
-  echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"
-done < "$REPO/models.txt"
-# the local chat/fallback model: 32B if present, else the 7B tool model
-if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
-echo "   local model = $LOCAL_MODEL"
+# ---------- 1. local models (skipped entirely with GHOST_NO_LOCAL; 32B optional via GHOST_LOCAL_32B) ----------
+LOCAL_MODEL="ghost-tool:latest"
+if [ -n "$NO_LOCAL" ]; then
+  say "GHOST_NO_LOCAL -- skipping Ollama + all local models (hosted-only)"
+else
+  say "Local models"
+  while IFS=$'\t' read -r src alias opt; do
+    case "$src" in \#*|"") continue;; esac
+    if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
+      echo "   skipping optional $alias (26GB) -- set GHOST_LOCAL_32B=1 to include the stronger local model"; continue
+    fi
+    if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"; continue; fi
+    echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"
+  done < "$REPO/models.txt"
+  # the local chat/fallback model: 32B if present, else the 7B tool model
+  if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
+  echo "   local model = $LOCAL_MODEL"
+fi
 
 # ---------- 2. uncensored profile ----------
 say "Writing the uncensored profile"
@@ -67,6 +75,15 @@ mkdir -p "$PROFILE"
 sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
+if [ -n "$NO_LOCAL" ]; then   # no local model -> route auxiliary + fallback to the hosted 70B
+  "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
+           r"provider: nous\n\1model: nousresearch/hermes-4-70b", s)
+open(p, "w").write(s); print("   no-local: auxiliary + fallback routed to hosted hermes-4-70b")
+PYEOF
+fi
 
 # ---------- 3. privacy stack (skipped with GHOST_DIRECT) ----------
 if [ -z "$DIRECT" ]; then
@@ -111,8 +128,7 @@ if [ -n "$NOUS_API_KEY" ]; then
 import sys
 p, key, url = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(p).read()
-s = s.replace("  default: nousresearch/hermes-4-405b\n  provider: nous",
-              "  default: nousresearch/hermes-4-405b\n  provider: nous-key")
+s = s.replace("provider: nous\n", "provider: nous-key\n")  # default + (no-local) auxiliary all use the key
 if "\n  nous-key:" not in s:
     s = s.replace("providers:\n  ollama-local:",
         "providers:\n  nous-key:\n    base_url: " + url + "\n    api_key: " + key +
