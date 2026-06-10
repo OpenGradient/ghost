@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Scrub user-visible "Hermes" branding from a forked engine tree.
+"""Scrub user-visible "Hermes" branding + incognito-harden a forked engine tree.
 
-SURGICAL: only replaces display strings + the two ASCII-art logo constants. It never
-touches Python identifiers, import paths, the `hermes_cli`/`hermes_constants` package
-names, `HERMES_HOME`, config keys, or `~/.hermes` paths -- so the engine keeps running.
-Scans every .py plus the web UI assets, excluding the venv and caches. Idempotent.
+SURGICAL: replaces display strings, the two ASCII-art logo constants, and a few targeted
+code patches (kill the startup update-check phone-home + the Hermes User-Agent fingerprint).
+It never touches Python identifiers, import paths, the `hermes_cli`/`hermes_constants`
+package names, `HERMES_HOME`, config keys, or `~/.hermes` paths -- so the engine keeps
+running. Scans every .py + web UI asset, excluding the venv and caches. Idempotent.
 
     python3 debrand.py [ENGINE_DIR]   # default: ~/.ghost-engine
 """
@@ -12,8 +13,7 @@ import os, re, sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/.ghost-engine")
 
-# (find, replace) -- display phrases only; none collide with code identifiers:
-# "Hermes Agent" has a space (≠ hermes_agent / hermes_cli); the rest are user-facing prose.
+# (find, replace) display phrases only -- order matters (⚕->👻 before the "👻 Hermes" label).
 SUBS = [
     ("Hermes Agent", "Ghost"),
     ("⚕", "👻"),
@@ -22,6 +22,10 @@ SUBS = [
     ("You are Hermes", "You are Ghost"),
     ("Hermes, your", "Ghost, your"),
     ("the Hermes assistant", "the Ghost assistant"),
+    ("👻 Hermes", "👻 Ghost"),
+    ("Hermes CLI", "Ghost CLI"),
+    ("chat with Hermes", "chat with Ghost"),
+    ("[Hermes #", "[Ghost #"),
 ]
 
 # The block-letter title + the figure art (defined as `NAME = """..."""` constants,
@@ -43,10 +47,22 @@ GHOST_ART = """[#FFD700]       ▄▄▄▄▄▄▄▄[/]
 [#CD7F32]    ██▀██▀██▀██▀██[/]"""
 ART_CONSTS = [("HERMES_AGENT_LOGO", GHOST_LOGO), ("HERMES_CADUCEUS", GHOST_ART)]
 
+# Incognito code patches: (file basename, find-regex, replace). Kill phone-homes / fingerprints.
+CODE_PATCHES = [
+    # disable the interactive-startup github + pypi update-check phone-home
+    ("banner.py",
+     r"def prefetch_update_check\(\):\n(?:    .*\n)+?    t\.start\(\)",
+     'def prefetch_update_check():\n    """Disabled in ghost (incognito): no update-check phone-home."""\n    _update_check_done.set()'),
+    # strip the Hermes User-Agent fingerprint sent to the inference router
+    ("run_agent.py",
+     r'f"HermesAgent/\{_HERMES_VERSION\}"',
+     'f"Ghost/{_HERMES_VERSION}"'),
+]
+
 SKIP_DIRS = {"venv", "__pycache__", "node_modules", ".git"}
 EXTS = (".py", ".html", ".js", ".css", ".md", ".txt")
 
-files, subs = 0, 0
+files, subs, patches = 0, 0, 0
 for dp, dirs, fs in os.walk(ROOT):
     dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
     for f in fs:
@@ -66,8 +82,12 @@ for dp, dirs, fs in os.walk(ROOT):
             if name + ' = """' in s:
                 s = re.sub(name + r' = """.*?"""',
                            name + ' = """' + art + '"""', s, count=1, flags=re.DOTALL)
+        for fname, find, repl in CODE_PATCHES:
+            if f == fname and re.search(find, s):
+                s = re.sub(find, repl, s, count=1)
+                patches += 1
         if s != orig:
             open(p, "w", encoding="utf-8").write(s)
             files += 1
 
-print(f"debranded {files} files, {subs} display-string replacements in {ROOT}")
+print(f"debranded {files} files, {subs} display-string replacements, {patches} code patches in {ROOT}")
