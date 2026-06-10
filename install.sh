@@ -91,6 +91,8 @@ if [ -z "$DIRECT" ]; then
 else
   say "GHOST_DIRECT set -- skipping proxy + scrubber; ghost will talk to Nous directly"
   sed -i '' -E '/^(HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|DDGS_PROXY|NOUS_INFERENCE_BASE_URL)=/d' "$PROFILE/.env" 2>/dev/null || true
+  # the model catalog is served by the (absent) scrubber -- disable it so the picker doesn't hang
+  "$PYTHON" -c "p='$PROFILE/config.yaml';s=open(p).read();open(p,'w').write(s.replace('model_catalog:\n  enabled: true','model_catalog:\n  enabled: false'))" 2>/dev/null || true
   : > "$HERMES_HOME/.ghost-direct"   # marker -> the `ghost` launcher skips its privacy gate
 fi
 
@@ -103,9 +105,20 @@ ENGINE="$ENG/venv/bin/hermes"
 say "Nous Portal auth (the default 405B model)"
 if ! have_nous && [ -f "$HERMES_HOME/auth.json" ]; then cp "$HERMES_HOME/auth.json" "$PROFILE/auth.json"; fi
 if [ -n "$NOUS_API_KEY" ]; then
-  echo "   using provided API key  (inference-url: $INFER_URL)"
-  HERMES_HOME="$HERMES_HOME" "$ENGINE" -p uncensored auth add nous --type api-key \
-    --api-key "$NOUS_API_KEY" --inference-url "$INFER_URL" --label ghost || echo "   (auth add failed -- add the key manually)"
+  echo "   wiring the API key as a custom OpenAI-compatible provider (inference: $INFER_URL)"
+  "$PYTHON" - "$PROFILE/config.yaml" "$NOUS_API_KEY" "$INFER_URL" <<'PYEOF'
+import sys
+p, key, url = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(p).read()
+s = s.replace("  default: nousresearch/hermes-4-405b\n  provider: nous",
+              "  default: nousresearch/hermes-4-405b\n  provider: nous-key")
+if "\n  nous-key:" not in s:
+    s = s.replace("providers:\n  ollama-local:",
+        "providers:\n  nous-key:\n    base_url: " + url + "\n    api_key: " + key +
+        "\n    default_model: nousresearch/hermes-4-405b\n    context_length: 65536\n  ollama-local:")
+open(p, "w").write(s)
+print("   nous-key provider wired")
+PYEOF
 elif ! have_nous; then
   echo "   opening Nous Portal browser login (sign in to enable 405B)..."
   HERMES_HOME="$HERMES_HOME" "$ENGINE" -p uncensored portal login || true
