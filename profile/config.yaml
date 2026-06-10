@@ -34,8 +34,8 @@ agent:
   restart_drain_timeout: 60
   api_max_retries: 3
   service_tier: fast
-  tool_use_enforcement: auto
-  task_completion_guidance: false
+  tool_use_enforcement: true
+  task_completion_guidance: true
   environment_probe: false
   environment_hint: ''
   gateway_timeout_warning: 900

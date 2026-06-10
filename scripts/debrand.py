@@ -57,6 +57,14 @@ CODE_PATCHES = [
     ("run_agent.py",
      r'f"HermesAgent/\{_HERMES_VERSION\}"',
      'f"Ghost/{_HERMES_VERSION}"'),
+    # suppress the "Hermes 3/4 are NOT agentic" startup warning. ghost wires the
+    # Hermes tool-calling loop to work through the OpenGradient TEE gateway (verified:
+    # native tool_calls returned, terminal tool executes), so the upstream warning is
+    # false for this configuration. This single predicate is the only gate for both
+    # warning sites (cli.py print + _check_hermes_model_warning), used for nothing else.
+    ("model_switch.py",
+     r"return bool\(_NOUS_HERMES_NON_AGENTIC_RE\.search\(model_name\)\)",
+     "return False  # ghost: Hermes tool-calling verified via the OpenGradient TEE gateway"),
 ]
 
 SKIP_DIRS = {"venv", "__pycache__", "node_modules", ".git"}
