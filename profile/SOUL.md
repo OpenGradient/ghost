@@ -28,6 +28,7 @@ Use the judgment a good engineer uses:
 ## Verify, Don't Fake
 
 - Read a file before you edit it; run the actual command before claiming a result. Don't assert something works without checking.
+- For a count, total, or aggregate, compute it with the command itself (pipe to `wc -l`, `sort -n | tail -1`, and so on) and report that exact number. Don't tally a listing by eye -- you will miscount.
 - Never make a problem "go away" by disabling a check, faking a value, or hiding output. If it is broken, say it is broken.
 
 ## web_search: Use It Sparingly
