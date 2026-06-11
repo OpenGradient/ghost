@@ -116,6 +116,8 @@ PASS_PATHS_SENTINEL = os.path.expanduser("~/.ghost/privacy/.pass_paths")
 # [REDACTED_PII] breaks path navigation. Names/secrets in prose are still scrubbed.
 # Create ~/.ghost/privacy/.full_redaction to redact paths too (maximum privacy).
 FULL_REDACTION_SENTINEL = os.path.expanduser("~/.ghost/privacy/.full_redaction")
+NO_SCRUB_SENTINEL = os.path.expanduser("~/.ghost/privacy/.no_scrub")  # PII redaction is OPTIONAL: this marker (ghost --no-scrub) turns off name/PII
+# redaction; secrets (API keys, JWTs, private keys) are ALWAYS scrubbed regardless.
 PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
 
@@ -135,7 +137,7 @@ def load_denylist():
 DENY = [(t, re.compile(re.escape(t), re.IGNORECASE)) for t in load_denylist()]
 
 
-def scrub(text, pass_paths=False):
+def scrub(text, pass_paths=False, pii=True):
     if not isinstance(text, str) or not text:
         return text, 0
     n = 0
@@ -146,14 +148,15 @@ def scrub(text, pass_paths=False):
             return f"\x00P{len(held)-1}\x00"
 
         text = PATH_RE.sub(_hold, text)
-    for _term, rx in DENY:
-        text, c = rx.subn("[REDACTED_PII]", text)
-        n += c
-    text, c = EMAIL_RE.subn("[REDACTED_EMAIL]", text); n += c
-    text, c = SSN_RE.subn("[REDACTED_SSN]", text); n += c
-    text, c = CC_RE.subn("[REDACTED_CC]", text); n += c
-    text, c = IP_RE.subn("[REDACTED_IP]", text); n += c
-    text, c = PHONE_RE.subn("[REDACTED_PHONE]", text); n += c
+    if pii:  # name/PII redaction is optional; secrets below are always scrubbed
+        for _term, rx in DENY:
+            text, c = rx.subn("[REDACTED_PII]", text)
+            n += c
+        text, c = EMAIL_RE.subn("[REDACTED_EMAIL]", text); n += c
+        text, c = SSN_RE.subn("[REDACTED_SSN]", text); n += c
+        text, c = CC_RE.subn("[REDACTED_CC]", text); n += c
+        text, c = IP_RE.subn("[REDACTED_IP]", text); n += c
+        text, c = PHONE_RE.subn("[REDACTED_PHONE]", text); n += c
     for rx in SECRET_RES:
         text, c = rx.subn("[REDACTED_SECRET]", text); n += c
     for i, p in enumerate(held):
@@ -166,6 +169,7 @@ def scrub_body(obj):
     if not isinstance(obj, dict):
         return obj, 0
     pp = not os.path.exists(FULL_REDACTION_SENTINEL)  # default: protect filesystem paths
+    pii = not os.path.exists(NO_SCRUB_SENTINEL)  # PII redaction optional; secrets always scrubbed
     msgs = obj.get("messages")
     if isinstance(msgs, list):
         for m in msgs:
@@ -173,16 +177,16 @@ def scrub_body(obj):
                 continue
             c = m.get("content")
             if isinstance(c, str):
-                m["content"], k = scrub(c, pp); total += k
+                m["content"], k = scrub(c, pp, pii); total += k
             elif isinstance(c, list):
                 for part in c:
                     if isinstance(part, dict) and isinstance(part.get("text"), str):
-                        part["text"], k = scrub(part["text"], pp); total += k
+                        part["text"], k = scrub(part["text"], pp, pii); total += k
     p = obj.get("prompt")
     if isinstance(p, str):
-        obj["prompt"], k = scrub(p, pp); total += k
+        obj["prompt"], k = scrub(p, pp, pii); total += k
     elif isinstance(p, list):
-        obj["prompt"] = [scrub(x, pp)[0] if isinstance(x, str) else x for x in p]
+        obj["prompt"] = [scrub(x, pp, pii)[0] if isinstance(x, str) else x for x in p]
     return obj, total
 
 

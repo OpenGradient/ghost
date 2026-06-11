@@ -21,6 +21,15 @@ unset ANTHROPIC_API_KEY
 PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
+# --no-scrub / --scrub: persistent toggle for name/PII redaction. Secrets (API keys, JWTs,
+# private keys) are ALWAYS scrubbed regardless. Turn off when redaction mangles an essential
+# query (e.g. your own domain in the prompt). State persists across runs; status line shows it.
+NOSCRUB_MARK="__GHOST_HOME__/privacy/.no_scrub"
+case "${1:-}" in
+  --no-scrub|--noscrub) : > "$NOSCRUB_MARK"; shift ;;
+  --scrub) rm -f "$NOSCRUB_MARK"; shift ;;
+esac
+
 # Are we connected to a hosted account?  (hosted models need `ghost-login`.)
 if "$PY" "__GHOST_HOME__/privacy/chat_login.py" --status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
 
@@ -47,6 +56,7 @@ else
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
+[ -f "$NOSCRUB_MARK" ] && STATUS="$STATUS · 🔓 PII redaction OFF (secrets still scrubbed)"
 echo "$STATUS · $VPN" >&2
 
 HB="__ENG__/venv/bin/hermes"
