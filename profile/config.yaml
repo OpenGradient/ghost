@@ -29,7 +29,7 @@ toolsets:
 - hermes-cli
 max_concurrent_sessions: null
 agent:
-  max_turns: 90
+  max_turns: 12
   gateway_timeout: 1800
   restart_drain_timeout: 60
   api_max_retries: 3
@@ -162,15 +162,15 @@ tool_output:
   max_line_length: 2000
 tool_loop_guardrails:
   warnings_enabled: true
-  hard_stop_enabled: false
+  hard_stop_enabled: true
   warn_after:
     exact_failure: 2
     same_tool_failure: 3
     idempotent_no_progress: 2
   hard_stop_after:
-    exact_failure: 5
-    same_tool_failure: 8
-    idempotent_no_progress: 5
+    exact_failure: 3
+    same_tool_failure: 5
+    idempotent_no_progress: 3
 compression:
   enabled: true
   threshold: 0.5
