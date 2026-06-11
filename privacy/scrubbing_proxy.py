@@ -237,10 +237,30 @@ def _invalidate_config():
 
 
 # ── Upstream HTTP (optionally chained through the rotating proxy) ─────────────
+# The rotating proxy is a SOFT dependency for hosted inference: it only masks your IP
+# from the chat-api relay (which already knows your account via the Supabase token).
+# So if it is down we fall back to a DIRECT chat-api connection instead of hard-failing
+# to offline. Content stays private either way (OHTTP encrypts it; the TEE enclave
+# separates identity); only IP-masking is skipped on the fallback.
+_PROXY_PORT = int(ROTATING_PROXY.rsplit(":", 1)[1])
+
+
+def _proxy_alive():
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", _PROXY_PORT), timeout=1.5):
+            return True
+    except Exception:
+        return False
+
+
 def _http_client():
     use_proxy = not os.path.exists(DIRECT_MARKER)
-    if use_proxy:
+    if use_proxy and _proxy_alive():
         return httpx.Client(proxy=ROTATING_PROXY, timeout=300.0)
+    if use_proxy:
+        log("rotating proxy down -- DIRECT chat-api this call "
+            "(content still encrypted+private via OHTTP/TEE; IP-masking skipped)")
     return httpx.Client(timeout=300.0)
 
 

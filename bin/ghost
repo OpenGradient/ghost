@@ -47,11 +47,18 @@ if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
     STATUS="👻 ghost · ⚠️ OHTTP bridge DOWN (scrubber=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
   fi
 else
-  EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-  if [ "$HC" = "200" ] && [ -n "$EXIT_IP" ]; then
-    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · relayed via $EXIT_IP · $LOGIN · local 32B fallback"
+  # The OHTTP bridge (8788) is the real hosted dependency. The proxy only masks your IP;
+  # it's a soft layer -- if it's down the bridge falls back to direct chat-api, so proxy-down
+  # is NOT hosted-down (content stays private via OHTTP/TEE either way).
+  if [ "$HC" = "200" ]; then
+    EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
+    if [ -n "$EXIT_IP" ]; then
+      STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · IP-masked via $EXIT_IP · $LOGIN · local 32B fallback"
+    else
+      STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · ⚠️ proxy down → DIRECT (content still private; IP visible to relay) · $LOGIN"
+    fi
   else
-    STATUS="👻 ghost · ⚠️ privacy infra DOWN (bridge=$HC proxy=${EXIT_IP:-down}) -- hosted unreachable, falling back to LOCAL 32B (offline)"
+    STATUS="👻 ghost · ⚠️ OHTTP bridge DOWN (bridge=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
   fi
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
