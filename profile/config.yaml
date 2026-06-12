@@ -8,14 +8,15 @@ fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
 providers:
-  # Hosted models run through ghost's local OHTTP bridge (scrubbing_proxy.py),
-  # which PII-scrubs then OHTTP-encrypts each request to the OpenGradient
-  # chat-api TEE gateway -- the same private path the chat.opengradient.ai
-  # website uses. The api_key here is a placeholder: the bridge injects the real
-  # Supabase bearer (from `ghost-login`) itself and ignores this value.
+  # Hosted models run through ghost's local PII scrubber (scrubbing_proxy.py on
+  # :8788), which scrubs name/secrets out of the content then forwards to og-veil
+  # (127.0.0.1:11435). og-veil OHTTP-encrypts each request to the OpenGradient
+  # chat-api TEE gateway and verifies the response -- the same private path the
+  # chat.opengradient.ai website uses. The api_key here is a placeholder: og-veil
+  # holds the real Supabase session (from `ghost-login`) and this value is ignored.
   opengradient:
     base_url: http://127.0.0.1:8788/v1
-    api_key: ohttp-bearer-managed-by-ghost-bridge
+    api_key: managed-by-og-veil
     default_model: nous/hermes-4-405b
     context_length: 65536
   ollama-local:

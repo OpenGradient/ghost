@@ -1,11 +1,13 @@
 #!/bin/sh
 # ghost -- incognito agentic harness launcher (profile: uncensored).
-#   Default model: hosted nous/hermes-4-405b, reached through ghost's local OHTTP bridge
-#     (127.0.0.1:8788) -> PII scrubber -> chat-api TEE gateway (oblivious-HTTP + enclave).
+#   Default model: hosted nous/hermes-4-405b, reached through ghost's local scrubbing
+#     bridge (127.0.0.1:8788) -> og-veil (127.0.0.1:11435) -> chat-api TEE gateway
+#     (oblivious-HTTP + enclave; og-veil owns the OHTTP/registry/verification + auth).
 #   On-demand via /model: drops to the fully-local 32B/7B (true incognito, nothing leaves).
 # Warns (never hard-blocks) if the privacy infra is down or you're not logged in, so the
 # offline local model still runs.
 SCRUBBER="http://127.0.0.1:8788"
+VEIL="http://127.0.0.1:11435"
 PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
 SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
@@ -30,36 +32,30 @@ case "${1:-}" in
   --scrub) rm -f "$NOSCRUB_MARK"; shift ;;
 esac
 
-# Are we connected to a hosted account?  (hosted models need `ghost-login`.)
-if "$PY" "__GHOST_HOME__/privacy/chat_login.py" --status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
+# Are we connected to a hosted account?  (hosted models need `ghost-login` -> og-veil login.)
+if "$PY" -m veil status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
 
 # Self-heal the hosted inference route through the scrubber (a token refresh can reset it).
 "$PY" "__GHOST_HOME__/privacy/ensure_scrubber_route.py" 2>/dev/null || true
 
-# Is the local OHTTP bridge up?  (it's what carries hosted requests.)
+# Is the local scrubbing bridge up, and is og-veil (which carries the hosted request) up?
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
+VC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$VEIL/health" 2>/dev/null)
 
-if [ -f "__GHOST_HOME__/.ghost-direct" ]; then
-  # Direct mode: OHTTP bridge talks to chat-api directly (no Webshare rotation).
-  if [ "$HC" = "200" ]; then
-    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP) · $LOGIN · local 32B fallback"
+if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
+  # Direct is the default: og-veil talks to chat-api itself (content stays private via
+  # OHTTP/TEE). If the optional rotating proxy (GHOST_PROXY=1) is up, og-veil's egress is
+  # IP-masked through it -- we probe its exit IP purely for the status line.
+  EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
+  if [ -n "$EXIT_IP" ]; then
+    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · local 32B fallback"
   else
-    STATUS="👻 ghost · ⚠️ OHTTP bridge DOWN (scrubber=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
+    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · $LOGIN · local 32B fallback"
   fi
+elif [ "$HC" = "200" ]; then
+  STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), falling back to LOCAL 32B (offline)"
 else
-  # The OHTTP bridge (8788) is the real hosted dependency. The proxy only masks your IP;
-  # it's a soft layer -- if it's down the bridge falls back to direct chat-api, so proxy-down
-  # is NOT hosted-down (content stays private via OHTTP/TEE either way).
-  if [ "$HC" = "200" ]; then
-    EXIT_IP=$(/usr/bin/curl -s --max-time 8 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-    if [ -n "$EXIT_IP" ]; then
-      STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · IP-masked via $EXIT_IP · $LOGIN · local 32B fallback"
-    else
-      STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP) · ⚠️ proxy down → DIRECT (content still private; IP visible to relay) · $LOGIN"
-    fi
-  else
-    STATUS="👻 ghost · ⚠️ OHTTP bridge DOWN (bridge=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
-  fi
+  STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"

@@ -1,11 +1,25 @@
 #!/bin/sh
-# ghost-login -- connect ghost to your OpenGradient Chat account for hosted models.
+# ghost-login -- connect ghost to your OpenGradient account for hosted models.
 #
-#   ghost-login            browser login: opens the website, hands a session token back
-#                          to this machine, and stores it for the OHTTP bridge to use.
+# Thin wrapper over og-veil (the opengradient-veil package), which owns the
+# session: the browser login, the Supabase token + auto-refresh, and the network
+# config. ghost no longer hand-rolls any of this.
+#
+#   ghost-login            browser login: opens the website, hands a session token
+#                          back to this machine, and stores it for og-veil to use.
 #   ghost-login --status   show whether you're connected (and as whom).
 #   ghost-login --logout   forget the stored session.
 #   ghost-login --paste    paste the token JSON manually (headless / no browser).
 #
 # Override the website with GHOST_CHAT_APP_URL (default https://chat.opengradient.ai).
-exec __PYTHON__ "__GHOST_HOME__/privacy/chat_login.py" "$@"
+PY=__PYTHON__
+# og-veil reads the chat-app origin from OG_VEIL_APP_URL.
+export OG_VEIL_APP_URL="${GHOST_CHAT_APP_URL:-https://chat.opengradient.ai}"
+
+case "${1:-}" in
+  --status) exec "$PY" -m veil status ;;
+  --logout) exec "$PY" -m veil logout ;;
+  --paste)  exec "$PY" -m veil login --manual ;;
+  "")       exec "$PY" -m veil login ;;
+  *)        exec "$PY" -m veil login "$@" ;;
+esac
