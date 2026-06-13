@@ -32,6 +32,10 @@ case "${1:-}" in
   --scrub) rm -f "$NOSCRUB_MARK"; shift ;;
 esac
 
+# --preview "<text>": show exactly what the PII scrubber would redact (entity table +
+# before/after + restore map) WITHOUT sending anything. Lets you see what leaves the box.
+if [ "${1:-}" = "--preview" ]; then shift; exec "$PY" "__GHOST_HOME__/privacy/presidio_scrub.py" "$@"; fi
+
 # Are we connected to a hosted account?  (hosted models need `ghost-login` -> og-veil login.)
 if "$PY" -m veil status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
 

@@ -44,6 +44,17 @@ VEIL_URL = os.environ.get("GHOST_VEIL_URL", "http://127.0.0.1:11435/v1").rstrip(
 LOG = os.path.expanduser("~/.ghost/privacy/scrubber.log")
 DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
 
+# NER PII scrubbing (Presidio + spaCy) with reversible placeholders. Enabled by the
+# .presidio marker; falls back hard to the legacy regex scrubber on any import/runtime
+# error so the bridge never goes down over a scrubber problem.
+PRESIDIO_MARKER = os.path.expanduser("~/.ghost/privacy/.presidio")
+try:
+    import presidio_scrub
+    _PRESIDIO_OK = True
+except Exception:
+    presidio_scrub = None
+    _PRESIDIO_OK = False
+
 # Curated picker whitelist served at /model-catalog.json -- the chat-app hosted
 # model line-up. Every model here routes through og-veil. Model ids carry a
 # provider prefix (matching the website); the prefix is stripped to the gateway
@@ -185,6 +196,61 @@ def scrub_body(obj):
     return obj, total
 
 
+def _anonymize_request(obj):
+    """Anonymize the request body -> (obj, count, mapping). With Presidio enabled (.presidio
+    marker) use NER + reversible placeholders, returning {placeholder: original} for response
+    de-anonymization. Otherwise, or on any error, fall back to the legacy regex scrubber."""
+    if not (_PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER)):
+        obj, n = scrub_body(obj)
+        return obj, n, {}
+    try:
+        pii = not os.path.exists(NO_SCRUB_SENTINEL)
+        mapping, total = {}, 0
+        msgs = obj.get("messages")
+        if isinstance(msgs, list):
+            for m in msgs:
+                if not isinstance(m, dict):
+                    continue
+                c = m.get("content")
+                if isinstance(c, str):
+                    m["content"], mapping, k = presidio_scrub.anonymize(c, mapping, pii=pii); total += k
+                elif isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            part["text"], mapping, k = presidio_scrub.anonymize(part["text"], mapping, pii=pii); total += k
+        p = obj.get("prompt")
+        if isinstance(p, str):
+            obj["prompt"], mapping, k = presidio_scrub.anonymize(p, mapping, pii=pii); total += k
+        return obj, total, mapping
+    except Exception as e:
+        log(f"presidio anonymize failed ({e}); falling back to legacy scrub")
+        obj, n = scrub_body(obj)
+        return obj, n, {}
+
+
+def _deanonymize_body(body, mapping):
+    """Restore placeholders in a non-streaming chat/completions response body. Tool-call
+    arguments are de-anonymized only for LOCAL tools, so the real value (e.g. a secret) is
+    executed/written locally while the model and relay only ever saw the placeholder."""
+    if not mapping or not isinstance(body, dict):
+        return body
+    try:
+        for ch in (body.get("choices") or []):
+            msg = ch.get("message") if isinstance(ch, dict) else None
+            if not isinstance(msg, dict):
+                continue
+            if isinstance(msg.get("content"), str):
+                msg["content"] = presidio_scrub.deanonymize(msg["content"], mapping)
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if (isinstance(fn, dict) and isinstance(fn.get("arguments"), str)
+                        and presidio_scrub._is_local_tool(fn.get("name", ""))):
+                    fn["arguments"] = presidio_scrub.deanonymize(fn["arguments"], mapping)
+    except Exception:
+        pass
+    return body
+
+
 # ── Model mapping ─────────────────────────────────────────────────────────────
 def _gateway_model(model):
     """Strip the provider prefix to the gateway model name (mirrors the website).
@@ -301,7 +367,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # Scrub before anything leaves localhost, then strip the provider prefix
         # to the gateway model name. og-veil does the rest (OHTTP/TEE/verify).
-        obj, redactions = scrub_body(obj)
+        # With Presidio, redaction is reversible: keep the {placeholder: original}
+        # map on the handler to de-anonymize og-veil's response/stream locally.
+        obj, redactions, self._pii_map = _anonymize_request(obj)
         wants_stream = bool(obj.get("stream", False))
         obj["model"] = _gateway_model(obj.get("model"))
 
@@ -327,13 +395,15 @@ class Handler(BaseHTTPRequestHandler):
             if resp.status_code >= 400:
                 self._error(resp.status_code, _decode_error(resp.content))
                 return
-            # Pass the body straight back (og-veil already verified it and attached
-            # the opengradient_verification block).
+            # og-veil already verified the response and attached the
+            # opengradient_verification block. De-anonymize placeholders locally
+            # (content + local tool-call args) before handing it to the engine.
             try:
                 body = resp.json()
             except Exception:
                 self._error(502, _decode_error(resp.content))
                 return
+            body = _deanonymize_body(body, getattr(self, "_pii_map", None))
             self._send_json(200, body)
 
     def _relay_stream(self, obj):
@@ -353,17 +423,36 @@ class Handler(BaseHTTPRequestHandler):
                 if verified:
                     self.send_header("X-OpenGradient-Verified", verified)
                 self.end_headers()
-                # og-veil verified the whole stream before replaying it, so we can
-                # forward bytes through untouched.
+                # og-veil verified the whole stream before replaying it. If we
+                # anonymized the request, de-anonymize placeholders on the way out
+                # (content + local tool-call args, split-delta safe); otherwise the
+                # legacy/regex path has nothing to restore, so forward bytes untouched.
+                mp = getattr(self, "_pii_map", None)
+                deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
                 for chunk in resp.iter_raw():
-                    if chunk:
-                        self.wfile.write(chunk)
+                    if not chunk:
+                        continue
+                    out = deanon.feed(chunk) if deanon else chunk
+                    if out:
+                        self.wfile.write(out)
+                        self.wfile.flush()
+                if deanon:
+                    tail = deanon.close()
+                    if tail:
+                        self.wfile.write(tail)
                         self.wfile.flush()
 
 
 if __name__ == "__main__":
+    # Warm spaCy now (if Presidio is enabled) so the first real request isn't slow.
+    if _PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER):
+        try:
+            presidio_scrub.anonymize("warmup")
+            log("presidio warm (NER scrubbing active)")
+        except Exception as e:
+            log(f"presidio warmup failed ({e}); using legacy scrub")
     log(
         f"scrubbing bridge up on {LISTEN[0]}:{LISTEN[1]} -> og-veil {VEIL_URL}; "
-        f"{len(DENY)} denylist terms"
+        f"{len(DENY)} denylist terms; presidio={'on' if (_PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER)) else 'off'}"
     )
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()
