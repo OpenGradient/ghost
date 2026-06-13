@@ -68,6 +68,12 @@ SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(comman
 say "Privacy-stack Python deps (opengradient-veil + httpx)"
 "$PYTHON" -m pip install -q --upgrade opengradient-veil httpx \
   || { echo "!! failed to install opengradient-veil (the hosted-inference engine); check pip/network and re-run."; exit 1; }
+# Optional NER PII scrubber (Presidio + spaCy en_core_web_md). Best-effort: if it installs,
+# ghost enables it; if not, the proven regex scrubber stays in use. ~40MB model.
+if ! "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
+  echo "   installing Presidio (NER PII scrubber)"; "$PYTHON" -m pip install -q presidio-analyzer presidio-anonymizer 2>/dev/null || true
+fi
+"$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md 2>/dev/null || true
 
 # ---------- 1. local models (skipped with GHOST_NO_LOCAL; 32B optional via GHOST_LOCAL_32B) ----------
 LOCAL_MODEL="ghost-tool:latest"
@@ -115,6 +121,13 @@ fi
 say "Privacy stack (PII/secret scrubber -> og-veil${USE_PROXY:+ + rotating proxy})"
 mkdir -p "$PRIV/searxng"
 cp "$REPO"/privacy/*.py "$PRIV/"
+# Enable the NER PII scrubber when Presidio + the spaCy model are present; else leave it off
+# (the bridge falls back to the regex scrubber). Toggle anytime: touch/rm $PRIV/.presidio.
+if "$PYTHON" -c "import presidio_analyzer, en_core_web_md" 2>/dev/null; then
+  : > "$PRIV/.presidio"; echo "   NER PII scrubber (Presidio + spaCy) enabled"
+else
+  rm -f "$PRIV/.presidio"; echo "   Presidio not available -- using the regex scrubber"
+fi
 [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
 cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
 mkdir -p "$LA"
