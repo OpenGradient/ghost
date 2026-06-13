@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""PII-scrubbing OpenAI bridge to the OpenGradient chat-api TEE gateway (OHTTP).
+"""PII-scrubbing OpenAI bridge that forwards to og-veil's local server.
 
 This is ghost's hosted-inference path. The forked Hermes engine talks plain
 OpenAI HTTP to us over localhost; we scrub PII/secrets out of the outbound
-content, then wrap each request in OHTTP (the *same* oblivious-HTTP + HPKE
-transport the chat.opengradient.ai website uses) and relay it through chat-api
-to a TEE gateway resolved from the on-chain registry:
+content and strip the provider prefix from the model id, then forward the (still
+plain-OpenAI) request to **og-veil**'s local server, which owns the entire
+privacy protocol -- on-chain TEE registry discovery, Oblivious-HTTP/HPKE
+encryption, the chat-api relay, and per-response verification:
 
     Hermes (uncensored profile)
-      --plaintext localhost-->  THIS (127.0.0.1:8788)   [scrub PII/secrets]
-      --HPKE-encrypted OHTTP-->  chat-api /api/v1/chat/ohttp   [Supabase bearer]
-      --relay-->  TEE gateway   [decrypts in-enclave, runs model, signs output]
+      --plaintext localhost-->  THIS (127.0.0.1:8788)        [scrub PII/secrets]
+      --plaintext localhost-->  og-veil (127.0.0.1:11435)    [OHTTP + TEE + verify]
+      ---------------------->  chat-api relay  -->  TEE gateway
 
 Because Hermes talks to us over plaintext localhost, we read & rewrite the body
-before it is ever encrypted, so your name/email/secrets never reach the relay
-*or* the enclave. The relay (chat-api) sees your account token + IP but only
-ciphertext; the enclave sees the prompt but never your identity.
+*before* it is handed to og-veil for encryption, so your name/email/secrets never
+reach the relay or the enclave. og-veil verifies every response against the
+enclave's registry signing key before a token is returned (verify-before-emit),
+and tags it with an `X-OpenGradient-Verified` header we pass straight through.
 
-Auth comes from `ghost-login` (see chat_login.py / chat_auth.py): a Supabase
-session captured from the website, auto-refreshed as it ages.
-
-Replaces ghost's previous direct-to-Nous path. The model catalog served here is
-the chat-app hosted model line-up (Anthropic / OpenAI / Google / xAI / ByteDance
-/ Nous Hermes), all running through this one private path.
+Previously ghost hand-rolled the whole OHTTP/HPKE/registry/verification stack
+here (privacy/ohttp_client.py) plus the Supabase auth (privacy/chat_auth.py /
+chat_login.py). That is now delegated entirely to og-veil (the `opengradient-veil`
+package), so this process only scrubs and forwards -- one implementation of the
+protocol, shared with the chat-app and the og-veil CLI. Run `ghost-login`
+(-> `og-veil login`) once to connect your account; og-veil holds the session and
+masks your IP on its own egress.
 """
 import json
 import os
@@ -32,27 +35,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-import chat_auth
-import ohttp_client as ohttp
-
 LISTEN = ("127.0.0.1", 8788)
-ROTATING_PROXY = "http://127.0.0.1:8899"  # chain to chat-api through Webshare rotation
+# og-veil's local OpenAI-compatible server. It owns OHTTP/HPKE, the TEE registry,
+# response verification, and the Supabase session -- everything ghost used to
+# hand-roll. Override the port/host with GHOST_VEIL_URL (default :11435, chosen to
+# avoid colliding with Ollama on :11434).
+VEIL_URL = os.environ.get("GHOST_VEIL_URL", "http://127.0.0.1:11435/v1").rstrip("/")
 LOG = os.path.expanduser("~/.ghost/privacy/scrubber.log")
 DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
-DIRECT_MARKER = os.path.expanduser("~/.ghost/.ghost-direct")
-
-# TEE response verification mode: off | warn | strict (default warn).
-#   warn   -> verify when possible; log a warning on mismatch but still serve.
-#   strict -> raise on any verification failure (refuse tampered responses).
-#   off    -> skip verification entirely.
-TEE_VERIFY = os.environ.get("GHOST_TEE_VERIFY", "warn").strip().lower()
-
-_OHTTP_CONFIG_TTL = 300  # re-resolve a TEE from the registry every 5 min
 
 # Curated picker whitelist served at /model-catalog.json -- the chat-app hosted
-# model line-up. Every model here routes through this OHTTP path. Model ids
-# carry a provider prefix (matching the website); the prefix is stripped to the
-# gateway model name before the request is sent (see _gateway_model).
+# model line-up. Every model here routes through og-veil. Model ids carry a
+# provider prefix (matching the website); the prefix is stripped to the gateway
+# model name before the request is forwarded (see _gateway_model).
 _CATALOG_MODELS = [
     ("nous/hermes-4-405b", "Hermes 4 405B — flagship open model, steerable & uncensored (default)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight assistant"),
@@ -202,98 +197,26 @@ def _gateway_model(model):
     return model
 
 
-# ── OHTTP config cache (full on-chain registry read) ──────────────────────────
-_cached_config = None
-_cached_at = 0.0
+# ── Upstream: og-veil's local OpenAI-compatible server ────────────────────────
+# The scrubber -> og-veil hop is plaintext localhost, so it must never go through
+# the rotating proxy (that would defeat the localhost assumption and add latency);
+# trust_env=False ignores any ambient HTTPS_PROXY. og-veil does the IP-masking on
+# its *own* egress to chat-api.
+def _veil_client():
+    return httpx.Client(timeout=300.0, trust_env=False)
 
 
-def _get_ohttp_config(force=False):
-    global _cached_config, _cached_at
-    now = time.time()
-    if not force and _cached_config is not None and (now - _cached_at) < _OHTTP_CONFIG_TTL:
-        return _cached_config
-    cfg = chat_auth.get_config()
-    rpc = cfg.get("tee_registry_rpc_url")
-    addr = cfg.get("tee_registry_address")
-    if not rpc or not addr:
-        raise ohttp.OhttpError(
-            "TEE registry is not configured (re-run ghost-login, or set "
-            "GHOST_TEE_REGISTRY_RPC_URL / GHOST_TEE_REGISTRY_ADDRESS)."
-        )
-    config = ohttp.read_registry_ohttp_config(
-        rpc_url=rpc,
-        registry_address=addr,
-        tee_type=int(cfg.get("tee_registry_tee_type") or ohttp.TEE_TYPE_LLM_PROXY),
-        app_env=str(cfg.get("app_env") or "production"),
-    )
-    _cached_config, _cached_at = config, now
-    log(f"resolved TEE {config.tee_id} @ {config.endpoint}")
-    return config
-
-
-def _invalidate_config():
-    global _cached_config
-    _cached_config = None
-
-
-# ── Upstream HTTP (optionally chained through the rotating proxy) ─────────────
-# The rotating proxy is a SOFT dependency for hosted inference: it only masks your IP
-# from the chat-api relay (which already knows your account via the Supabase token).
-# So if it is down we fall back to a DIRECT chat-api connection instead of hard-failing
-# to offline. Content stays private either way (OHTTP encrypts it; the TEE enclave
-# separates identity); only IP-masking is skipped on the fallback.
-_PROXY_PORT = int(ROTATING_PROXY.rsplit(":", 1)[1])
-
-
-def _proxy_alive():
-    import socket
+def _decode_error(raw: bytes) -> str:
     try:
-        with socket.create_connection(("127.0.0.1", _PROXY_PORT), timeout=1.5):
-            return True
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                return str(err.get("message") or err)
+            return str(err or data.get("detail") or "og-veil error")
     except Exception:
-        return False
-
-
-def _http_client():
-    use_proxy = not os.path.exists(DIRECT_MARKER)
-    if use_proxy and _proxy_alive():
-        return httpx.Client(proxy=ROTATING_PROXY, timeout=300.0)
-    if use_proxy:
-        log("rotating proxy down -- DIRECT chat-api this call "
-            "(content still encrypted+private via OHTTP/TEE; IP-masking skipped)")
-    return httpx.Client(timeout=300.0)
-
-
-def _chat_api_base():
-    base = chat_auth.get_config().get("chat_api_base_url")
-    if not base:
-        raise ohttp.OhttpError("chat-api base URL unknown (re-run ghost-login).")
-    return base.rstrip("/")
-
-
-def _verify(inner_for_hash, body, config, *, response_content=None):
-    """Verify a TEE response per GHOST_TEE_VERIFY (off|warn|strict).
-
-    In strict mode a failure raises (caller must abort before/while responding).
-    In warn mode failures are logged but the response is served anyway.
-    """
-    if TEE_VERIFY == "off":
-        return
-    try:
-        result = ohttp.verify_tee_response(
-            inner_request=inner_for_hash,
-            response_body=body,
-            signing_public_key_der=config.signing_public_key_der,
-            response_content=response_content,
-        )
-        if result.get("verified"):
-            log(f"TEE verified ✓ host={config.host} ts={result.get('timestamp')}")
-        else:
-            log(f"TEE response unsigned ({result.get('reason')}) host={config.host}")
-    except Exception as e:
-        if TEE_VERIFY == "strict":
-            raise
-        log(f"⚠️ TEE verification failed (warn mode, serving anyway): {e}")
+        pass
+    return raw.decode("utf-8", errors="ignore")[:300] or "og-veil error"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -336,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         # Provider-detection probes -- answer LOCALLY so the engine doesn't try to reach a
         # remote provider just to detect the endpoint type (it fires these per turn). Serving
         # them instantly keeps per-turn latency down, and the model list stays consistent with
-        # the hosted catalog. Real chat goes through do_POST -> OHTTP -> chat-api TEE gateway.
+        # the hosted catalog. Real chat goes through do_POST -> og-veil -> chat-api TEE gateway.
         probe = self.path.rstrip("/")
         if probe in ("/v1/models", "/api/v1/models", "/models"):
             ml = json.dumps(
@@ -368,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         raw = self.rfile.read(n) if n else b""
         if not ("chat/completions" in path or path.endswith("/completions")):
-            self._error(404, "ghost OHTTP bridge only serves /v1/chat/completions")
+            self._error(404, "ghost scrubbing bridge only serves /v1/chat/completions")
             return
         try:
             obj = json.loads(raw)
@@ -376,168 +299,71 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, f"invalid JSON body: {e}")
             return
 
-        # Scrub before anything leaves localhost.
+        # Scrub before anything leaves localhost, then strip the provider prefix
+        # to the gateway model name. og-veil does the rest (OHTTP/TEE/verify).
         obj, redactions = scrub_body(obj)
-        wants_stream = bool(obj.pop("stream", False))
+        wants_stream = bool(obj.get("stream", False))
         obj["model"] = _gateway_model(obj.get("model"))
 
-        # The canonical subset the gateway signs over (model/messages/temperature
-        # [+web_search]) -- used only for optional verification.
-        inner_for_hash = {"model": obj.get("model"), "messages": obj.get("messages", [])}
-        if "temperature" in obj:
-            inner_for_hash["temperature"] = float(obj["temperature"])
-        if obj.get("web_search"):
-            inner_for_hash["web_search"] = True
-
-        log(f"chat/completions model={obj.get('model')} stream={wants_stream} redactions={redactions}")
+        log(f"chat/completions model={obj.get('model')} stream={wants_stream} redactions={redactions} -> {VEIL_URL}")
         try:
             if wants_stream:
-                self._relay_stream(obj, inner_for_hash)
+                self._relay_stream(obj)
             else:
-                self._relay_single(obj, inner_for_hash)
-        except ohttp.OhttpError as e:
-            self._error(502, f"OHTTP error: {e}")
+                self._relay_single(obj)
+        except httpx.HTTPError as e:
+            # og-veil unreachable (not running / not logged in). Surface it so the
+            # launcher's fallback to the local model kicks in.
+            log(f"og-veil unreachable: {e}")
+            self._error(502, f"could not reach og-veil at {VEIL_URL} ({type(e).__name__}) — is it running? try `ghost-login`")
         except Exception as e:
             log(f"upstream-error {e}")
             self._error(502, str(e))
 
-    # ── auth + transport ──
-    def _auth_headers(self, accept, stream, tee_id, force_refresh=False):
-        token = chat_auth.get_valid_access_token(force_refresh=force_refresh)
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": ohttp.OHTTP_REQUEST_MEDIA_TYPE,
-            "Accept": accept,
-            "X-TEE-ID": tee_id,
-        }
-        if stream:
-            headers["X-OHTTP-Stream"] = "true"
-        return headers
-
-    def _post_ohttp(self, client, inner_request, *, stream):
-        """Encapsulate + POST to chat-api, retrying once on a 401 (token refresh)."""
-        config = _get_ohttp_config()
-        accept = ohttp.OHTTP_CHUNKED_RESPONSE_MEDIA_TYPE if stream else ohttp.OHTTP_RESPONSE_MEDIA_TYPE
-        url = _chat_api_base() + ohttp.OHTTP_ENDPOINT
-
-        for attempt in (0, 1):
-            enc = ohttp.encapsulate(config, inner_request)
-            headers = self._auth_headers(accept, stream, config.tee_id, force_refresh=(attempt == 1))
-            req = client.build_request("POST", url, headers=headers, content=enc.wire)
-            resp = client.send(req, stream=stream)
-            if resp.status_code == 401 and attempt == 0:
-                resp.close()
-                continue  # token likely expired between refreshes -> force refresh & retry
-            return enc, resp, config
-        return enc, resp, config
-
-    def _relay_single(self, inner_request, inner_for_hash):
-        with _http_client() as client:
-            enc, resp, config = self._post_ohttp(client, inner_request, stream=False)
-            sealed = resp.read()
+    # ── transport: scrub -> forward to og-veil ──
+    def _relay_single(self, obj):
+        with _veil_client() as client:
+            resp = client.post(VEIL_URL + "/chat/completions", json=obj)
             if resp.status_code >= 400:
-                self._error(resp.status_code, _decode_relay_error(sealed))
+                self._error(resp.status_code, _decode_error(resp.content))
                 return
-            inner = ohttp.decrypt_single(enc, sealed)
-            if inner["status"] >= 400:
-                self._error(inner["status"], str(inner["body"].get("error", "TEE inner error")))
-                return
-            body = inner["body"]
-            # Verify before responding so strict mode can refuse a bad response.
+            # Pass the body straight back (og-veil already verified it and attached
+            # the opengradient_verification block).
             try:
-                _verify(inner_for_hash, body, config)
-            except Exception as e:
-                self._error(502, f"TEE verification failed: {e}")
+                body = resp.json()
+            except Exception:
+                self._error(502, _decode_error(resp.content))
                 return
             self._send_json(200, body)
 
-    def _relay_stream(self, inner_request, inner_for_hash):
-        wire_request = dict(inner_request)
-        wire_request["stream"] = True
-        with _http_client() as client:
-            enc, resp, config = self._post_ohttp(client, wire_request, stream=True)
-            if resp.status_code >= 400:
-                sealed = resp.read()
-                self._error(resp.status_code, _decode_relay_error(sealed))
-                return
-
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self.end_headers()
-
-            decrypter = ohttp.ChunkedResponseDecrypter(enc.chunked_response_secret, enc.enc)
-            full_content = []
-            final_body = None
-            for network_chunk in resp.iter_bytes():
-                for plaintext in decrypter.push(network_chunk, done=False):
-                    self.wfile.write(plaintext)
-                    self.wfile.flush()
-                    c, fb = _parse_sse(plaintext)
-                    full_content.append(c)
-                    if fb is not None:
-                        final_body = fb
-            for plaintext in decrypter.push(None, done=True):
-                self.wfile.write(plaintext)
-                self.wfile.flush()
-                c, fb = _parse_sse(plaintext)
-                full_content.append(c)
-                if fb is not None:
-                    final_body = fb
-
-            # Headers/body already streamed, so verification here is log-only
-            # even in strict mode (we can't un-send). Logged for auditability.
-            if final_body is not None and TEE_VERIFY != "off":
-                try:
-                    _verify(inner_for_hash, final_body, config, response_content="".join(full_content))
-                except Exception as e:
-                    log(f"⚠️ TEE stream verification failed: {e}")
-
-
-def _parse_sse(plaintext: bytes):
-    """Pull assistant delta text and the signed final frame out of an SSE chunk."""
-    content = ""
-    final_body = None
-    try:
-        text = plaintext.decode("utf-8", errors="ignore")
-    except Exception:
-        return content, final_body
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[len("data:"):].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        try:
-            parsed = json.loads(payload)
-        except Exception:
-            continue
-        if not isinstance(parsed, dict):
-            continue
-        choices = parsed.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            delta = choices[0].get("delta")
-            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                content += delta["content"]
-        if isinstance(parsed.get("tee_signature"), str) or isinstance(parsed.get("tee_output_hash"), str):
-            final_body = parsed
-    return content, final_body
-
-
-def _decode_relay_error(raw: bytes) -> str:
-    try:
-        data = json.loads(raw)
-        return str(data.get("detail") or data.get("error") or "relay error")
-    except Exception:
-        return raw.decode("utf-8", errors="ignore")[:300] or "relay error"
+    def _relay_stream(self, obj):
+        obj = dict(obj)
+        obj["stream"] = True
+        with _veil_client() as client:
+            with client.stream("POST", VEIL_URL + "/chat/completions", json=obj) as resp:
+                if resp.status_code >= 400:
+                    self._error(resp.status_code, _decode_error(resp.read()))
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", resp.headers.get("Content-Type", "text/event-stream"))
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                # Surface og-veil's verification header to the engine/logs.
+                verified = resp.headers.get("X-OpenGradient-Verified")
+                if verified:
+                    self.send_header("X-OpenGradient-Verified", verified)
+                self.end_headers()
+                # og-veil verified the whole stream before replaying it, so we can
+                # forward bytes through untouched.
+                for chunk in resp.iter_raw():
+                    if chunk:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
 
 
 if __name__ == "__main__":
-    logged_in = chat_auth.is_logged_in()
     log(
-        f"OHTTP bridge up on {LISTEN[0]}:{LISTEN[1]} -> chat-api; verify={TEE_VERIFY}; "
-        f"{len(DENY)} denylist terms; logged_in={logged_in}"
+        f"scrubbing bridge up on {LISTEN[0]}:{LISTEN[1]} -> og-veil {VEIL_URL}; "
+        f"{len(DENY)} denylist terms"
     )
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.advait.hermes-veil</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>-m</string>
+        <string>veil</string>
+        <string>serve</string>
+        <string>--foreground</string>
+        <string>--skip-setup</string>
+        <string>--port</string>
+        <string>11435</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OG_VEIL_PORT</key>
+        <string>11435</string>
+__VEIL_PROXY_ENV__
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.ghost/privacy/veil.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.ghost/privacy/veil.err.log</string>
+</dict>
+</plist>
