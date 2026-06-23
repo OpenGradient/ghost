@@ -167,6 +167,58 @@ def test_stream_local_tool_restores_secret():
     assert ph not in text
 
 
+def test_transient_detection():
+    assert sp._is_transient(502, "Selected TEE is not active in the registry")
+    assert sp._is_transient(500, "Stream setup failed")
+    assert sp._is_transient(503, "")
+    assert not sp._is_transient(400, "bad request")
+    assert not sp._is_transient(200, "ok")
+
+
+def test_stream_utf8_split_across_chunks():
+    # an emoji's bytes split across two feeds must NOT be dropped/corrupted
+    sd = presidio_scrub.StreamDeanonymizer({})
+    # ensure_ascii=False so the emoji is raw multi-byte UTF-8 in the wire bytes (some upstreams
+    # send raw, not \uXXXX-escaped) -- that's the case the incremental decoder must handle.
+    frame = ('data: ' + json.dumps({"choices": [{"delta": {"role": "assistant", "content": "hi 😀"}}]},
+                                    ensure_ascii=False) + "\n\n")
+    raw = frame.encode("utf-8")
+    cut = raw.index(b"\xf0")  # first byte of the emoji
+    out = sd.feed(raw[: cut + 2])  # split mid-emoji
+    out += sd.feed(raw[cut + 2:])
+    out += sd.feed(b"data: [DONE]\n\n")
+    out += sd.close()
+    # reconstruct emitted content (re-emit may \u-escape, which is valid JSON) and assert intact
+    content = ""
+    for line in out.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        p = line[len("data:"):].strip()
+        if p in ("", "[DONE]"):
+            continue
+        try:
+            content += json.loads(p)["choices"][0]["delta"].get("content", "") or ""
+        except Exception:
+            pass
+    assert "😀" in content, "split multi-byte char was dropped"
+
+
+def test_stream_multiline_data_frame_deanonymized():
+    mapping = {}
+    _, mapping, _ = presidio_scrub.anonymize(f"hi {SECRET}", mapping, pii=False)
+    ph = next(iter(mapping))
+    sd = presidio_scrub.StreamDeanonymizer(mapping)
+    # a tool-call frame for a LOCAL tool spread normally; ensure parse path restores it
+    frame = "data: " + json.dumps(
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c0", "type": "function",
+             "function": {"name": "terminal", "arguments": '{"x":"' + ph + '"}'}}]}}]}
+    ) + "\n\n"
+    out = sd.feed(frame) + sd.feed("data: [DONE]\n\n") + sd.close()
+    assert SECRET in out.decode(), "multi-line/parse path must still de-anon local tool args"
+
+
 def test_catalog_is_unrestricted_only():
     # ghost must only offer/allow genuinely unrestricted models (Hermes); no closed/refusing ones.
     allowed = sp._ALLOWED_GATEWAY_MODELS
