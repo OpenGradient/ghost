@@ -36,6 +36,24 @@ esac
 # before/after + restore map) WITHOUT sending anything. Lets you see what leaves the box.
 if [ "${1:-}" = "--preview" ]; then shift; exec "$PY" "__GHOST_HOME__/privacy/presidio_scrub.py" "$@"; fi
 
+# --local: force the fully-offline local model for this run (true incognito -- nothing leaves the
+# box, no scrubber/og-veil/network). Requires a local install (GHOST_LOCAL=1). Picks the local
+# model from the ollama-local provider's default_model in config (uncensored-local 32B if present,
+# else ghost-tool 7B). Without a local model installed, tells you how to get one.
+if [ "${1:-}" = "--local" ]; then
+  shift
+  LM=$(grep -A4 '^  ollama-local:' "__GHOST_HOME__/profiles/uncensored/config.yaml" 2>/dev/null \
+        | grep 'default_model:' | head -1 | sed 's/.*default_model:[[:space:]]*//')
+  [ -n "$LM" ] || LM="ghost-tool:latest"
+  OLLAMA_BIN="$(command -v ollama || echo /opt/homebrew/bin/ollama)"
+  if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$(printf '%s' "$LM" | cut -d: -f1)"; then
+    echo "👻 ghost · ⚠️ no local model installed ($LM). Reinstall with GHOST_LOCAL=1 to add the offline model." >&2
+    exit 1
+  fi
+  echo "👻 ghost · 🔒 LOCAL mode = $LM (fully offline -- no scrubber, no og-veil, nothing leaves the box)" >&2
+  exec "__ENG__/venv/bin/hermes" -p uncensored -m "$LM" --provider ollama-local "$@"
+fi
+
 # Are we connected to a hosted account?  (hosted models need `ghost-login` -> og-veil login.)
 if "$PY" -m veil status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN="⚠️ not logged in (run: ghost-login)"; fi
 
