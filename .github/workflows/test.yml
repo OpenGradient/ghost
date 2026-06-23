@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  scrubber-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pytest httpx presidio-analyzer presidio-anonymizer
+      - name: Download spaCy model
+        run: python -m spacy download en_core_web_md
+      - name: Run scrubber tests (incl. golden leak canary)
+        run: pytest tests/ -q

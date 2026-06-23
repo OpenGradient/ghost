@@ -26,6 +26,13 @@
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
+# macOS only: the privacy stack runs as launchd LaunchAgents and uses BSD tooling. Fail fast
+# with a clear message rather than part-installing on Linux/WSL and erroring confusingly later.
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "!! ghost's installer currently supports macOS only (it uses launchd). Detected: $(uname -s)." >&2
+  exit 1
+fi
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
 GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
@@ -132,7 +139,7 @@ fi
 
 # ---------- 3. privacy stack (PII scrubber + og-veil always; rotating proxy only with GHOST_PROXY) ----------
 say "Privacy stack (PII/secret scrubber -> og-veil${USE_PROXY:+ + rotating proxy})"
-mkdir -p "$PRIV/searxng"
+mkdir -p "$PRIV"
 cp "$REPO"/privacy/*.py "$PRIV/"
 # Enable the NER PII scrubber when Presidio + the spaCy model are present; else leave it off
 # (the bridge falls back to the regex scrubber). Toggle anytime: touch/rm $PRIV/.presidio.

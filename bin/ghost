@@ -69,10 +69,9 @@ elif [ "$HC" = "200" ]; then
 else
   STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, $FB_DOWN"
 fi
-if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
 [ -f "$NOSCRUB_MARK" ] && STATUS="$STATUS · 🔓 PII redaction OFF (secrets still scrubbed)"
-echo "$STATUS · $VPN" >&2
+echo "$STATUS" >&2
 
 HB="__ENG__/venv/bin/hermes"
 if [ -n "$PASS_PATHS" ]; then

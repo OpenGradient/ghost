@@ -174,7 +174,9 @@ path still runs.
 - `profile/` -- `config.yaml` (the full incognito profile), `SOUL.md` (the Ghost identity), `.env.example`, `pii_denylist.example.txt`, `uncensored_prefill.json`
 - `privacy/`
   - `scrubbing_proxy.py` -- the PII/secret scrubber + local model-catalog endpoint; forwards cleaned requests to og-veil
-  - `rotating_proxy.py` -- Webshare rotation + blocklist · `gen_searxng_settings.py`
+  - `scrub_patterns.py` -- single source of the secret + PII regexes (shared by both scrub paths)
+  - `presidio_scrub.py` -- NER PII detection (Presidio + spaCy) with reversible placeholders + stream de-anon
+  - `rotating_proxy.py` -- Webshare rotation (opt-in IP-masking)
   - `ensure_scrubber_route.py` -- self-heals the engine's hosted route back to the scrubber after a token refresh
   - _(the OHTTP/HPKE/registry/verification + Supabase auth that used to live here now comes from the `opengradient-veil` package -- run `og-veil`)_
 - `scripts/` -- `fork-engine.sh` (copy + relocate venv + isolate skills) and `debrand.py` (scrub visible strings + the two ASCII-art logos)
