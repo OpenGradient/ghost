@@ -72,8 +72,11 @@ SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(comman
 # hand-rolls any of it (cryptography/web3 come in transitively via the SDK). The
 # scrubbing bridge only needs httpx to forward to og-veil's local server.
 say "Privacy-stack Python deps (opengradient-veil + httpx)"
-"$PYTHON" -m pip install -q --upgrade opengradient-veil httpx \
-  || { echo "!! failed to install opengradient-veil (the hosted-inference engine); check pip/network and re-run."; exit 1; }
+# Pinned: og-veil is the load-bearing OHTTP/HPKE/TEE-verify boundary, so we don't silently
+# --upgrade into a behavior/verification change. Bump the pin in requirements.txt deliberately.
+"$PYTHON" -m pip install -q -r "$REPO/requirements.txt" \
+  || { echo "!! failed to install the privacy stack (opengradient-veil + httpx); check pip/network and re-run."; exit 1; }
+echo "   og-veil $("$PYTHON" -m pip show opengradient-veil 2>/dev/null | awk '/^Version:/{print $2}')"
 # Optional NER PII scrubber (Presidio + spaCy en_core_web_md). Best-effort: if it installs,
 # ghost enables it; if not, the proven regex scrubber stays in use. ~40MB model.
 if ! "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then

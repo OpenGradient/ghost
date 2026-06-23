@@ -32,17 +32,9 @@ REDACT_ENTITIES = [
 ]
 SCORE_THRESHOLD = 0.5  # ignore low-confidence hits to avoid over-redaction
 
-# Secrets: always scrubbed (regex), even with PII redaction off. Mirrors the legacy scrubber.
-SECRET_RES = [
-    re.compile(r"\b(?:sk|rk)-(?:ant-|nous-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}"),
-    re.compile(r"\bgh[posru]_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-    re.compile(r"\bfw_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----[\s\S]+?-----END[^-]+-----"),
-]
+# Secrets: always scrubbed (regex), even with PII redaction off. Shared with the legacy scrubber
+# via scrub_patterns.py so the two paths never drift on the security-critical secret set.
+from scrub_patterns import SECRET_RES  # noqa: E402
 
 _PH_RE = re.compile(r"<([A-Z_]+)_(\d+)>")
 _analyzer = None

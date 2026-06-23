@@ -77,6 +77,7 @@ SKIP_DIRS = {"venv", "__pycache__", "node_modules", ".git"}
 EXTS = (".py", ".html", ".js", ".css", ".md", ".txt")
 
 files, subs, patches = 0, 0, 0
+applied = {}  # CODE_PATCHES index -> times applied; used to fail loud on a silent miss
 for dp, dirs, fs in os.walk(ROOT):
     dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
     for f in fs:
@@ -96,12 +97,24 @@ for dp, dirs, fs in os.walk(ROOT):
             if name + ' = """' in s:
                 s = re.sub(name + r' = """.*?"""',
                            name + ' = """' + art + '"""', s, count=1, flags=re.DOTALL)
-        for fname, find, repl in CODE_PATCHES:
+        for i, (fname, find, repl) in enumerate(CODE_PATCHES):
             if f == fname and re.search(find, s):
                 s = re.sub(find, repl, s, count=1)
                 patches += 1
+                applied[i] = applied.get(i, 0) + 1
         if s != orig:
             open(p, "w", encoding="utf-8").write(s)
             files += 1
 
 print(f"debranded {files} files, {subs} display-string replacements, {patches} code patches in {ROOT}")
+
+# Fail loud: every code patch must have applied. A silent miss (upstream renamed/moved the code
+# the regex targets) would quietly leave ghost on upstream's behavior -- e.g. the update-check
+# phone-home re-enabled, or the HOME-isolation/agentic patches reverted. Better to break the
+# install than ship a half-debranded engine.
+missed = [CODE_PATCHES[i][0] + ":" + CODE_PATCHES[i][1][:40] for i in range(len(CODE_PATCHES)) if not applied.get(i)]
+if missed:
+    sys.stderr.write("!! debrand: code patch(es) did not apply (upstream may have changed):\n")
+    for m in missed:
+        sys.stderr.write(f"   - {m}\n")
+    sys.exit(1)
