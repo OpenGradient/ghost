@@ -55,25 +55,15 @@ except Exception:
     presidio_scrub = None
     _PRESIDIO_OK = False
 
-# Curated picker whitelist served at /model-catalog.json -- the chat-app hosted
-# model line-up. Every model here routes through og-veil. Model ids carry a
-# provider prefix (matching the website); the prefix is stripped to the gateway
-# model name before the request is forwarded (see _gateway_model).
+# Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so
+# it only offers genuinely unrestricted (open-weight, steerable) models -- the Hermes family.
+# Closed, safety-tuned models (Claude, GPT, Gemini, Grok, Seed) defeat the point: they refuse,
+# moralize, and can't be steered, so they are deliberately NOT offered even though the gateway
+# can serve them. This list is the single source of truth for both the picker and the bridge's
+# allow-list (see _ALLOWED_GATEWAY_MODELS) -- to add a model, it must be actually unrestricted.
 _CATALOG_MODELS = [
-    ("nous/hermes-4-405b", "Hermes 4 405B — flagship open model, steerable & uncensored (default)"),
-    ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight assistant"),
-    ("anthropic/claude-fable-5", "Claude Fable 5 — Anthropic's most capable model"),
-    ("anthropic/claude-opus-4-8", "Claude Opus 4.8 — top-tier reasoning"),
-    ("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6 — balanced writing & code"),
-    ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5 — fast, low-cost replies"),
-    ("openai/gpt-5.5", "GPT-5.5 — most capable for hard problems"),
-    ("openai/gpt-5", "GPT-5 — powerful all-rounder"),
-    ("openai/gpt-5-mini", "GPT-5 Mini — fast and affordable"),
-    ("google/gemini-3.5-flash", "Gemini 3.5 Flash — latest, fast and capable"),
-    ("google/gemini-2.5-pro", "Gemini 2.5 Pro — deep reasoning, huge context"),
-    ("x-ai/grok-4.3", "Grok 4.3 — top-tier reasoning"),
-    ("x-ai/grok-4", "Grok 4 — solid all-rounder"),
-    ("bytedance/seed-1.8", "Seed 1.8 — strong multilingual"),
+    ("nous/hermes-4-405b", "Hermes 4 405B — flagship open model, steerable & unrestricted (default)"),
+    ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
 
 CATALOG_BYTES = json.dumps(
@@ -276,6 +266,13 @@ def _gateway_model(model):
     return model
 
 
+# Gateway-model allow-list, derived from the catalog so the two never drift. ghost ENFORCES
+# unrestricted-only: a request for any model not in this set is rejected, so a misconfig or a
+# manual `/model` can't route prompts to a closed, refusing model. The catalog is the one place
+# to add a model -- and only if it's genuinely unrestricted.
+_ALLOWED_GATEWAY_MODELS = frozenset(_gateway_model(mid) for mid, _ in _CATALOG_MODELS)
+
+
 # ── Upstream: og-veil's local OpenAI-compatible server ────────────────────────
 # The scrubber -> og-veil hop is plaintext localhost, so it must never go through
 # the rotating proxy (that would defeat the localhost assumption and add latency);
@@ -385,6 +382,15 @@ class Handler(BaseHTTPRequestHandler):
         obj, redactions, self._pii_map = _anonymize_request(obj)
         wants_stream = bool(obj.get("stream", False))
         obj["model"] = _gateway_model(obj.get("model"))
+
+        # Unrestricted-only: refuse to route to a closed/safety-tuned model even if asked.
+        if obj.get("model") not in _ALLOWED_GATEWAY_MODELS:
+            self._error(
+                400,
+                f"ghost only routes to unrestricted models ({', '.join(sorted(_ALLOWED_GATEWAY_MODELS))}); "
+                f"'{obj.get('model')}' is not enabled",
+            )
+            return
 
         log(f"chat/completions model={obj.get('model')} stream={wants_stream} redactions={redactions} -> {VEIL_URL}")
         try:
