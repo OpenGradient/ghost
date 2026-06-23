@@ -38,9 +38,12 @@ fully-local 32B. Optional install config via env:
 
 ```bash
 GHOST_PROXY=1      ./install.sh   # opt in to the Webshare rotating proxy (IP-mask the relay; off by default)
-GHOST_NO_LOCAL=1   ./install.sh   # hosted-only: no Ollama, no local models (lightest)
-GHOST_LOCAL_32B=1  ./install.sh   # also pull the stronger 32B local model (26GB)
+GHOST_LOCAL=1      ./install.sh   # also install Ollama + a local model for an offline/incognito fallback
+GHOST_LOCAL_32B=1  ./install.sh   # pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
 ```
+
+Local models are opt-in. By default ghost is hosted-only -- no Ollama, and the fallback + auxiliary
+tasks route to a hosted 70B over the same private og-veil path.
 
 Prerequisites are auto-installed; full details under [Install](#install) below.
 
@@ -198,8 +201,8 @@ directly (content is still private via OHTTP/TEE).
 
 ```bash
 GHOST_PROXY=1      ./install.sh   # opt in to the Webshare rotating proxy (IP-mask the chat-api relay)
-GHOST_NO_LOCAL=1   ./install.sh   # hosted-only (auxiliary + fallback routed to hosted hermes-4-70b)
-GHOST_LOCAL_32B=1  ./install.sh   # also pull the stronger 32B local model (26GB)
+GHOST_LOCAL=1      ./install.sh   # opt in to Ollama + a local model (offline/incognito fallback)
+GHOST_LOCAL_32B=1  ./install.sh   # pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
 GHOST_CHAT_APP_URL=https://...    # override the website used for ghost-login (default chat.opengradient.ai)
 ```
 

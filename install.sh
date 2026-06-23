@@ -20,8 +20,9 @@
 # Optional config via env (all optional -- plain `./install.sh` does the full private setup):
 #   GHOST_PROXY=1        opt in to the Webshare rotating proxy: masks your IP from the chat-api
 #                        relay (og-veil egress) + carries the engine's web-search egress
-#   GHOST_NO_LOCAL=1     skip Ollama + all local models (hosted-only, lightest)
-#   GHOST_LOCAL_32B=1    also pull the stronger 32B local model (26GB)
+#   GHOST_LOCAL=1        also install Ollama + a local model for an offline / true-incognito
+#                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 70B)
+#   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
@@ -37,7 +38,12 @@ SCRUBBER="http://127.0.0.1:8788"
 # Direct is the default. Opt in to the Webshare rotating proxy with GHOST_PROXY=1.
 # (GHOST_DIRECT is still honored for back-compat, but it's now the default anyway.)
 USE_PROXY="${GHOST_PROXY:-}"
-NO_LOCAL="${GHOST_NO_LOCAL:-}"   # skip Ollama + all local models (hosted-only)
+# Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
+# auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
+# path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
+# fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
+# since hosted-only is now the default.)
+WANT_LOCAL="${GHOST_LOCAL:-}"; [ -n "${GHOST_LOCAL_32B:-}" ] && WANT_LOCAL=1
 
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
@@ -46,9 +52,9 @@ have(){ command -v "$1" >/dev/null 2>&1; }
 say "Dependencies"
 [ -n "$PYTHON" ] || { echo "!! need python3 (3.11+); install it and re-run."; exit 1; }
 
-if [ -z "$NO_LOCAL" ]; then
+if [ -n "$WANT_LOCAL" ]; then
   if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
-  have ollama || { echo "!! Install Ollama from https://ollama.com (or set GHOST_NO_LOCAL=1 for hosted-only) then re-run."; exit 1; }
+  have ollama || { echo "!! GHOST_LOCAL set but Ollama is missing -- install it from https://ollama.com (or drop GHOST_LOCAL for hosted-only) then re-run."; exit 1; }
   pgrep -xq ollama || open -a Ollama 2>/dev/null || true ; sleep 1
 fi
 
@@ -75,12 +81,12 @@ if ! "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; t
 fi
 "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md 2>/dev/null || true
 
-# ---------- 1. local models (skipped with GHOST_NO_LOCAL; 32B optional via GHOST_LOCAL_32B) ----------
+# ---------- 1. local models (OPT-IN via GHOST_LOCAL; 32B also needs GHOST_LOCAL_32B) ----------
 LOCAL_MODEL="ghost-tool:latest"
-if [ -n "$NO_LOCAL" ]; then
-  say "GHOST_NO_LOCAL -- skipping Ollama + all local models (hosted-only)"
+if [ -z "$WANT_LOCAL" ]; then
+  say "Hosted-only (default) -- skipping Ollama + local models. Set GHOST_LOCAL=1 for an offline / incognito local fallback."
 else
-  say "Local models"
+  say "Local models (GHOST_LOCAL)"
   while IFS=$'\t' read -r src alias opt; do
     case "$src" in \#*|"") continue;; esac
     if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
@@ -107,13 +113,17 @@ s = re.sub(r"(?m)^#\s*((?:HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|DDGS_PROXY)=\S+)\s*$"
 open(p, "w").write(s)
 PYEOF
 fi
-if [ -n "$NO_LOCAL" ]; then   # no local model -> route auxiliary + fallback to a hosted model via og-veil
+if [ -z "$WANT_LOCAL" ]; then   # hosted-only (default) -> route auxiliary + fallback to a hosted model via og-veil
   "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
 import sys, re
 p = sys.argv[1]; s = open(p).read()
+# Handle both key orders (provider-then-model and model-then-provider in the auxiliary blocks).
 s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
            r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
-open(p, "w").write(s); print("   no-local: auxiliary + fallback routed to hosted nous/hermes-4-70b (via og-veil)")
+s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
+           r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
+s = s.replace("provider: ollama-local", "provider: opengradient")
+open(p, "w").write(s); print("   hosted-only: auxiliary + fallback routed to hosted nous/hermes-4-70b (via og-veil)")
 PYEOF
 fi
 

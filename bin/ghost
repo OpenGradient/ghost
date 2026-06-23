@@ -46,20 +46,28 @@ if "$PY" -m veil status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN=
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
 VC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$VEIL/health" 2>/dev/null)
 
+# What does the primary fail over to? Local models are opt-in (GHOST_LOCAL at install); by
+# default the fallback is a hosted 70B over the same private path -- no Ollama. Detect which.
+if grep -q "provider: ollama-local" "__GHOST_HOME__/profiles/uncensored/config.yaml" 2>/dev/null; then
+  FB="local 32B fallback"; FB_DOWN="falling back to LOCAL 32B (offline)"
+else
+  FB="hosted 70B fallback"; FB_DOWN="no local fallback (hosted-only -- set GHOST_LOCAL=1 at install for offline)"
+fi
+
 if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
   # Direct is the default: og-veil talks to chat-api itself (content stays private via
   # OHTTP/TEE). If the optional rotating proxy (GHOST_PROXY=1) is up, og-veil's egress is
   # IP-masked through it -- we probe its exit IP purely for the status line.
   EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
   if [ -n "$EXIT_IP" ]; then
-    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · local 32B fallback"
+    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · $FB"
   else
-    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · $LOGIN · local 32B fallback"
+    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
   fi
 elif [ "$HC" = "200" ]; then
-  STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), falling back to LOCAL 32B (offline)"
+  STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), $FB_DOWN"
 else
-  STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, falling back to LOCAL 32B (offline)"
+  STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, $FB_DOWN"
 fi
 if scutil --dns 2>/dev/null | grep -q "103.86.9"; then VPN="✅ NordVPN"; else VPN="⚠️ no NordVPN"; fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
