@@ -49,6 +49,9 @@ DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
 # .presidio marker; falls back hard to the legacy regex scrubber on any import/runtime
 # error so the bridge never goes down over a scrubber problem.
 PRESIDIO_MARKER = os.path.expanduser("~/.ghost/privacy/.presidio")
+# Written when NER is EXPECTED (.presidio set) but unavailable/failed, so the degradation to the
+# weaker regex scrubber is visible (bin/ghost surfaces it) instead of silent. Cleared on success.
+PRESIDIO_FAILED_MARKER = os.path.expanduser("~/.ghost/privacy/.presidio_failed")
 try:
     import presidio_scrub
     _PRESIDIO_OK = True
@@ -517,16 +520,44 @@ class Handler(BaseHTTPRequestHandler):
                 raise
 
 
+def _mark_presidio_failed(reason):
+    """Record that NER was expected but isn't working, so bin/ghost can surface it loudly."""
+    log(f"!! NER scrubber UNAVAILABLE -- falling back to regex (names may NOT be scrubbed): {reason}")
+    try:
+        with open(PRESIDIO_FAILED_MARKER, "w") as f:
+            f.write(reason + "\n")
+    except Exception:
+        pass
+
+
+def _clear_presidio_failed():
+    try:
+        os.remove(PRESIDIO_FAILED_MARKER)
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
-    # Warm spaCy now (if Presidio is enabled) so the first real request isn't slow.
-    if _PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER):
-        try:
-            presidio_scrub.anonymize("warmup")
-            log("presidio warm (NER scrubbing active)")
-        except Exception as e:
-            log(f"presidio warmup failed ({e}); using legacy scrub")
+    # If NER is expected (.presidio set), prove it actually works at startup and FAIL LOUD if not
+    # -- a silent fall-through to the regex scrubber (empty denylist => no names scrubbed) is the
+    # dangerous failure mode for a privacy tool. The marker is surfaced in `ghost`'s status line.
+    expected = os.path.exists(PRESIDIO_MARKER)
+    active = False
+    if expected:
+        if not _PRESIDIO_OK:
+            _mark_presidio_failed("presidio/spacy import failed")
+        else:
+            try:
+                presidio_scrub.anonymize("warmup")
+                active = True
+                _clear_presidio_failed()
+                log("presidio warm (NER scrubbing active)")
+            except Exception as e:
+                _mark_presidio_failed(f"warmup error: {e}")
+    else:
+        _clear_presidio_failed()  # NER not expected; not a failure
     log(
         f"scrubbing bridge up on {LISTEN[0]}:{LISTEN[1]} -> og-veil {VEIL_URL}; "
-        f"{len(DENY)} denylist terms; presidio={'on' if (_PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER)) else 'off'}"
+        f"{len(DENY)} denylist terms; presidio={'on' if active else ('FAILED' if expected else 'off')}"
     )
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()

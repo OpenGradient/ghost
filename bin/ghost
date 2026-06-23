@@ -71,6 +71,8 @@ else
 fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
 [ -f "$NOSCRUB_MARK" ] && STATUS="$STATUS · 🔓 PII redaction OFF (secrets still scrubbed)"
+# NER scrubber expected but failed to load -> regex fallback (names may not be scrubbed). Loud.
+[ -f "__GHOST_HOME__/privacy/.presidio_failed" ] && STATUS="$STATUS · ⚠️ NER scrubber OFF (regex fallback -- reinstall or check Presidio)"
 echo "$STATUS" >&2
 
 HB="__ENG__/venv/bin/hermes"
