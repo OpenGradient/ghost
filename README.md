@@ -269,4 +269,9 @@ file work:
 
 ## License
 
-Personal tooling. The Hermes Agent engine is under its own license.
+[MIT](LICENSE). The Hermes Agent engine it builds on is under its own license.
+
+## Security
+
+ghost is a privacy tool; a PII/secret leak is treated as a P0. See [SECURITY.md](SECURITY.md)
+for how to report one privately.
