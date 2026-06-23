@@ -47,14 +47,27 @@ _PH_RE = re.compile(r"<([A-Z_]+)_(\d+)>")
 _analyzer = None
 _lock = threading.Lock()
 
-# Tool-call args are de-anonymized before LOCAL execution (so the real value hits disk), but
-# NOT for tools that egress externally -- a web_search/browser call must not leak the real
-# name/secret to a third party; it stays as the <placeholder>.
-_EXTERNAL_TOOLS = frozenset({"web_search", "web_extract", "web_fetch", "fetch", "web", "search"})
+# Tool-call args are de-anonymized before LOCAL execution (so the real value hits disk / runs),
+# but NOT for tools that egress externally -- a web_search / browser / messaging / image-gen /
+# delegation call must never leak the real name/secret to a third party; those keep the
+# <placeholder>. This is DEFAULT-DENY: only an explicit allow-list of local-execution tools
+# (filesystem, shell, code, local state) gets real values restored. Anything else -- web,
+# browser, computer-use, comms, image/tts, delegation, and any UNKNOWN tool -- is treated as
+# egress and keeps the placeholder, so a newly-added tool can't silently leak by default.
+# Names match the engine's actual tool ids (terminal/read_file/execute_code/patch/...).
+_LOCAL_TOOLS = frozenset({
+    "terminal", "shell", "bash", "sh", "process",
+    "execute_code", "code_execution", "code", "python", "run_code", "run",
+    "read_file", "write_file", "edit_file", "create_file", "str_replace",
+    "str_replace_editor", "apply_patch", "patch", "file", "files",
+    "search_files", "list_files", "glob", "grep",
+    "todo", "todos", "memory", "session_search", "clarify",
+    "skill_manage", "skill_view", "skills_list",
+})
 
 
 def _is_local_tool(name):
-    return not (not name or name in _EXTERNAL_TOOLS or name.startswith("browser"))
+    return bool(name) and name.lower() in _LOCAL_TOOLS
 
 
 def _get_analyzer():

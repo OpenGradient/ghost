@@ -170,30 +170,47 @@ def scrub(text, pass_paths=False, pii=True):
     return text, n
 
 
+# Structural / identifier keys whose VALUES must stay verbatim (model id, role/type enums,
+# tool & function names used for dispatch, ids/indexes, schema structure) and media blobs we
+# must not run NER over (base64 images, urls -- Presidio omits URLs anyway). Everything else
+# is a candidate string to scrub. Dict KEYS are never scrubbed, so JSON-schema property names
+# are safe automatically.
+_SKIP_KEYS = frozenset({
+    "model", "role", "type", "name", "id", "tool_call_id", "index", "object", "finish_reason",
+    "required", "enum", "format",
+    "url", "image_url", "data", "b64_json", "input_audio",
+})
+
+
+def _walk_strings(node, fn):
+    """Recursively apply fn(str)->str to every string VALUE in a JSON-like structure, skipping
+    structural keys (`_SKIP_KEYS`). Returns a new structure. This is what makes the outbound
+    scrub COMPLETE -- it reaches messages[].content, tool_calls[].function.arguments, tool /
+    function definitions, prompt, and any nested field, not just top-level content."""
+    if isinstance(node, str):
+        return fn(node)
+    if isinstance(node, list):
+        return [_walk_strings(x, fn) for x in node]
+    if isinstance(node, dict):
+        return {k: (v if k in _SKIP_KEYS else _walk_strings(v, fn)) for k, v in node.items()}
+    return node
+
+
 def scrub_body(obj):
-    total = 0
+    """Legacy regex scrubber over the WHOLE request body (used when Presidio is off / fails)."""
     if not isinstance(obj, dict):
         return obj, 0
     pp = not os.path.exists(FULL_REDACTION_SENTINEL)  # default: protect filesystem paths
     pii = not os.path.exists(NO_SCRUB_SENTINEL)  # PII redaction optional; secrets always scrubbed
-    msgs = obj.get("messages")
-    if isinstance(msgs, list):
-        for m in msgs:
-            if not isinstance(m, dict):
-                continue
-            c = m.get("content")
-            if isinstance(c, str):
-                m["content"], k = scrub(c, pp, pii); total += k
-            elif isinstance(c, list):
-                for part in c:
-                    if isinstance(part, dict) and isinstance(part.get("text"), str):
-                        part["text"], k = scrub(part["text"], pp, pii); total += k
-    p = obj.get("prompt")
-    if isinstance(p, str):
-        obj["prompt"], k = scrub(p, pp, pii); total += k
-    elif isinstance(p, list):
-        obj["prompt"] = [scrub(x, pp, pii)[0] if isinstance(x, str) else x for x in p]
-    return obj, total
+    total = 0
+
+    def fn(s):
+        nonlocal total
+        out, k = scrub(s, pp, pii)
+        total += k
+        return out
+
+    return _walk_strings(obj, fn), total
 
 
 def _anonymize_request(obj):
@@ -206,21 +223,17 @@ def _anonymize_request(obj):
     try:
         pii = not os.path.exists(NO_SCRUB_SENTINEL)
         mapping, total = {}, 0
-        msgs = obj.get("messages")
-        if isinstance(msgs, list):
-            for m in msgs:
-                if not isinstance(m, dict):
-                    continue
-                c = m.get("content")
-                if isinstance(c, str):
-                    m["content"], mapping, k = presidio_scrub.anonymize(c, mapping, pii=pii); total += k
-                elif isinstance(c, list):
-                    for part in c:
-                        if isinstance(part, dict) and isinstance(part.get("text"), str):
-                            part["text"], mapping, k = presidio_scrub.anonymize(part["text"], mapping, pii=pii); total += k
-        p = obj.get("prompt")
-        if isinstance(p, str):
-            obj["prompt"], mapping, k = presidio_scrub.anonymize(p, mapping, pii=pii); total += k
+
+        def fn(s):
+            nonlocal mapping, total
+            out, mapping, k = presidio_scrub.anonymize(s, mapping, pii=pii)
+            total += k
+            return out
+
+        # Walk the ENTIRE body: content, prompt, tool_calls[].function.arguments (replayed
+        # history -- the critical leak), and tool/function definitions all get the same
+        # per-request mapping so the response/stream de-anon restores them consistently.
+        obj = _walk_strings(obj, fn)
         return obj, total, mapping
     except Exception as e:
         log(f"presidio anonymize failed ({e}); falling back to legacy scrub")
