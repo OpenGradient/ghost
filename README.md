@@ -21,9 +21,9 @@ left out.
 
 ## Quickstart
 
-One command installs **everything** -- the Hermes engine forked into `~/.ghost-engine` and
-Ghost-branded, the privacy stack, and the `ghost` + `ghost-login` commands. (Local models via
-Ollama are opt-in: add `GHOST_LOCAL=1`.) Idempotent (safe to re-run):
+One command installs **everything** -- the engine into `~/.ghost-engine` (Ghost-branded), the
+privacy stack, and the `ghost` + `ghost-login` commands. (Local models via Ollama are opt-in:
+add `GHOST_LOCAL=1`.) Idempotent (safe to re-run):
 
 ```bash
 unzip ghost.zip -d ~/ghost && cd ~/ghost && ./install.sh
@@ -186,9 +186,8 @@ path still runs.
 
 ## Install
 
-**One command installs everything** -- the
-[Hermes Agent](https://hermes-agent.nousresearch.com) engine forked into `~/.ghost-engine` and
-Ghost-branded, the privacy stack (og-veil + httpx), and the `ghost` + `ghost-login` commands.
+**One command installs everything** -- the engine into `~/.ghost-engine` (Ghost-branded), the
+privacy stack (og-veil + httpx), and the `ghost` + `ghost-login` commands.
 (Local models via [Ollama](https://ollama.com) are opt-in: add `GHOST_LOCAL=1`.) Idempotent
 (safe to re-run):
 
@@ -197,7 +196,7 @@ Ghost-branded, the privacy stack (og-veil + httpx), and the `ghost` + `ghost-log
 ```
 
 The default is the **direct, hosted-only** private setup: it auto-installs prerequisites,
-starts the scrubber + og-veil, forks the engine into `~/.ghost-engine` and applies Ghost
+starts the scrubber + og-veil, installs the engine into `~/.ghost-engine` and applies Ghost
 branding, offers to run the account login, installs `ghost`, and smoke-tests it. No proxy is set
 up; og-veil talks to chat-api directly (content is still private via OHTTP/TEE). Local models
 are opt-in (`GHOST_LOCAL=1`).
