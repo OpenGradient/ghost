@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install deps
-        run: pip install pytest httpx presidio-analyzer presidio-anonymizer
+        # spacy explicit so its CLI deps (typer/click) are present for `spacy download`;
+        # presidio pulls spacy as a lib but not always the CLI extras.
+        run: pip install pytest httpx spacy presidio-analyzer presidio-anonymizer
       - name: Download spaCy model
         run: python -m spacy download en_core_web_md
       - name: Run scrubber tests (incl. golden leak canary)
