@@ -192,6 +192,16 @@ def test_expanded_secret_coverage(secret):
     assert n >= 1
 
 
+def test_presidio_failed_marker_roundtrip(tmp_path, monkeypatch):
+    marker = tmp_path / ".presidio_failed"
+    monkeypatch.setattr(sp, "PRESIDIO_FAILED_MARKER", str(marker))
+    sp._mark_presidio_failed("import failed")
+    assert marker.exists() and "import failed" in marker.read_text()
+    sp._clear_presidio_failed()
+    assert not marker.exists()
+    sp._clear_presidio_failed()  # idempotent: clearing an absent marker must not raise
+
+
 def test_transient_detection():
     assert sp._is_transient(502, "Selected TEE is not active in the registry")
     assert sp._is_transient(500, "Stream setup failed")
