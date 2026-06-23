@@ -19,6 +19,7 @@ spaCy NER + Presidio pattern recognizers (credit-card Luhn, RFC-822 email, etc.)
 is loaded once per process (~250ms first call, warm thereafter). Detection offsets + scores
 are also what powers the render/preview.
 """
+import codecs
 import json
 import re
 import threading
@@ -172,6 +173,9 @@ class StreamDeanonymizer:
         self.env = None     # last content-event envelope dict, reused to re-emit
         self.tc = {}        # tool_calls buffer: {index: {"id","type","name","args"}}
         self.tc_env = None  # tool_call envelope, reused to re-emit
+        # Incremental UTF-8 decoder: a multi-byte char split across chunk boundaries is held
+        # until complete instead of being dropped by a per-chunk errors='ignore' decode.
+        self._dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def _emit(self, text):
         if self.env is None or not text:
@@ -229,10 +233,14 @@ class StreamDeanonymizer:
         return self._flush_content() + self._flush_tool_calls()
 
     def _handle(self, event_text):
-        line = next((l for l in event_text.splitlines() if l.strip().startswith("data:")), None)
-        if line is None:
+        # SSE allows multiple `data:` lines per event that concatenate with newlines; collect
+        # them all (taking only the first would drop/misparse multi-line frames and forward the
+        # raw event WITHOUT de-anon, leaking a placeholder).
+        data_lines = [l.strip()[len("data:"):].lstrip()
+                      for l in event_text.splitlines() if l.strip().startswith("data:")]
+        if not data_lines:
             return event_text.encode()
-        payload = line.strip()[len("data:"):].strip()
+        payload = "\n".join(data_lines).strip()
         if not payload or payload == "[DONE]":
             return self._flush() + event_text.encode()
         try:
@@ -273,13 +281,17 @@ class StreamDeanonymizer:
 
     def feed(self, plaintext):
         out = bytearray()
-        self.raw += plaintext.decode("utf-8", errors="ignore") if isinstance(plaintext, bytes) else plaintext
+        self.raw += self._dec.decode(plaintext) if isinstance(plaintext, bytes) else plaintext
         while "\n\n" in self.raw:
             event, self.raw = self.raw.split("\n\n", 1)
             out += self._handle(event + "\n\n")
         return bytes(out)
 
     def close(self):
+        # Flush any bytes the incremental decoder was still holding, then any buffered state.
+        tail = self._dec.decode(b"", final=True)
+        if tail:
+            self.raw += tail
         out = bytearray(self._flush())
         if self.raw.strip():
             out += self.raw.encode()

@@ -29,6 +29,7 @@ masks your IP on its own egress.
 """
 import json
 import os
+import random
 import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -282,6 +283,25 @@ def _veil_client():
     return httpx.Client(timeout=300.0, trust_env=False)
 
 
+# og-veil / the gateway is intermittently flaky: a stale TEE selection 502s "Selected TEE is
+# not active in the registry" and the gateway occasionally 500s "Stream setup failed". Both
+# self-recover within seconds, so retry a couple of times with jittered backoff before giving
+# up. Chat completions are effectively idempotent here, so a retry is safe.
+_RETRY_STATUS = frozenset({500, 502, 503, 504})
+_MAX_TRIES = 3
+
+
+def _is_transient(status, body_text=""):
+    if status in _RETRY_STATUS:
+        return True
+    t = (body_text or "").lower()
+    return "tee is not active" in t or "stream setup failed" in t or "temporarily" in t
+
+
+def _backoff(attempt):
+    time.sleep(min(4.0, 0.5 * (2 ** attempt)) + random.uniform(0, 0.3))
+
+
 def _decode_error(raw: bytes) -> str:
     try:
         data = json.loads(raw)
@@ -393,6 +413,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         log(f"chat/completions model={obj.get('model')} stream={wants_stream} redactions={redactions} -> {VEIL_URL}")
+        self._headers_sent = False
         try:
             if wants_stream:
                 self._relay_stream(obj)
@@ -400,66 +421,113 @@ class Handler(BaseHTTPRequestHandler):
                 self._relay_single(obj)
         except httpx.HTTPError as e:
             # og-veil unreachable (not running / not logged in). Surface it so the
-            # launcher's fallback to the local model kicks in.
+            # launcher's fallback to the local model kicks in -- but only if we haven't
+            # already started a 200 response body (else we'd corrupt the stream).
             log(f"og-veil unreachable: {e}")
-            self._error(502, f"could not reach og-veil at {VEIL_URL} ({type(e).__name__}) — is it running? try `ghost-login`")
+            if not self._headers_sent:
+                self._error(502, f"could not reach og-veil at {VEIL_URL} ({type(e).__name__}) — is it running? try `ghost-login`")
         except Exception as e:
             log(f"upstream-error {e}")
-            self._error(502, str(e))
+            if not self._headers_sent:
+                self._error(502, str(e))
 
     # ── transport: scrub -> forward to og-veil ──
     def _relay_single(self, obj):
-        with _veil_client() as client:
-            resp = client.post(VEIL_URL + "/chat/completions", json=obj)
-            if resp.status_code >= 400:
-                self._error(resp.status_code, _decode_error(resp.content))
-                return
-            # og-veil already verified the response and attached the
-            # opengradient_verification block. De-anonymize placeholders locally
-            # (content + local tool-call args) before handing it to the engine.
+        last_status, last_body = 502, b""
+        for attempt in range(_MAX_TRIES):
             try:
-                body = resp.json()
-            except Exception:
-                self._error(502, _decode_error(resp.content))
+                with _veil_client() as client:
+                    resp = client.post(VEIL_URL + "/chat/completions", json=obj)
+            except httpx.HTTPError as e:
+                if attempt < _MAX_TRIES - 1:
+                    log(f"og-veil transport error (try {attempt + 1}): {e}; retrying")
+                    _backoff(attempt)
+                    continue
+                raise
+            if resp.status_code < 400:
+                # og-veil already verified the response and attached the
+                # opengradient_verification block. De-anonymize placeholders locally
+                # (content + local tool-call args) before handing it to the engine.
+                try:
+                    body = resp.json()
+                except Exception:
+                    self._error(502, _decode_error(resp.content))
+                    return
+                body = _deanonymize_body(body, getattr(self, "_pii_map", None))
+                self._send_json(200, body)
                 return
-            body = _deanonymize_body(body, getattr(self, "_pii_map", None))
-            self._send_json(200, body)
+            last_status, last_body = resp.status_code, resp.content
+            if _is_transient(resp.status_code, _decode_error(resp.content)) and attempt < _MAX_TRIES - 1:
+                log(f"og-veil {resp.status_code} transient (try {attempt + 1}); retrying")
+                _backoff(attempt)
+                continue
+            self._error(resp.status_code, _decode_error(resp.content))
+            return
+        self._error(last_status, _decode_error(last_body))
 
     def _relay_stream(self, obj):
         obj = dict(obj)
         obj["stream"] = True
-        with _veil_client() as client:
-            with client.stream("POST", VEIL_URL + "/chat/completions", json=obj) as resp:
-                if resp.status_code >= 400:
-                    self._error(resp.status_code, _decode_error(resp.read()))
-                    return
-                self.send_response(200)
-                self.send_header("Content-Type", resp.headers.get("Content-Type", "text/event-stream"))
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                # Surface og-veil's verification header to the engine/logs.
-                verified = resp.headers.get("X-OpenGradient-Verified")
-                if verified:
-                    self.send_header("X-OpenGradient-Verified", verified)
-                self.end_headers()
-                # og-veil verified the whole stream before replaying it. If we
-                # anonymized the request, de-anonymize placeholders on the way out
-                # (content + local tool-call args, split-delta safe); otherwise the
-                # legacy/regex path has nothing to restore, so forward bytes untouched.
-                mp = getattr(self, "_pii_map", None)
-                deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
-                for chunk in resp.iter_raw():
-                    if not chunk:
-                        continue
-                    out = deanon.feed(chunk) if deanon else chunk
-                    if out:
-                        self.wfile.write(out)
-                        self.wfile.flush()
-                if deanon:
-                    tail = deanon.close()
-                    if tail:
-                        self.wfile.write(tail)
-                        self.wfile.flush()
+        for attempt in range(_MAX_TRIES):
+            try:
+                with _veil_client() as client:
+                    with client.stream("POST", VEIL_URL + "/chat/completions", json=obj) as resp:
+                        if resp.status_code >= 400:
+                            body = resp.read()
+                            if _is_transient(resp.status_code, _decode_error(body)) and attempt < _MAX_TRIES - 1:
+                                log(f"og-veil {resp.status_code} transient (stream try {attempt + 1}); retrying")
+                                _backoff(attempt)
+                                continue
+                            self._error(resp.status_code, _decode_error(body))
+                            return
+                        # Status is good -> commit to the 200 stream. From here we must NOT
+                        # retry or send another status line; a mid-stream failure can only be
+                        # surfaced as a terminal error frame on the already-open body.
+                        self.send_response(200)
+                        self.send_header("Content-Type", resp.headers.get("Content-Type", "text/event-stream"))
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        verified = resp.headers.get("X-OpenGradient-Verified")
+                        if verified:
+                            self.send_header("X-OpenGradient-Verified", verified)
+                        self.end_headers()
+                        self._headers_sent = True
+                        # og-veil verified the whole stream before replaying it. If we anonymized
+                        # the request, de-anonymize on the way out (content + local tool-call args,
+                        # split-delta safe); otherwise forward bytes untouched.
+                        mp = getattr(self, "_pii_map", None)
+                        deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
+                        try:
+                            for chunk in resp.iter_raw():
+                                if not chunk:
+                                    continue
+                                out = deanon.feed(chunk) if deanon else chunk
+                                if out:
+                                    self.wfile.write(out)
+                                    self.wfile.flush()
+                            if deanon:
+                                tail = deanon.close()
+                                if tail:
+                                    self.wfile.write(tail)
+                                    self.wfile.flush()
+                        except Exception as e:
+                            # Mid-stream drop: the 200 body is already flowing, so emit a terminal
+                            # error event instead of corrupting it with a fresh status line.
+                            log(f"mid-stream drop: {e}")
+                            try:
+                                self.wfile.write(
+                                    b'data: {"error":{"message":"stream interrupted"}}\n\ndata: [DONE]\n\n'
+                                )
+                                self.wfile.flush()
+                            except Exception:
+                                pass
+                        return
+            except httpx.HTTPError as e:
+                if attempt < _MAX_TRIES - 1:
+                    log(f"og-veil transport error (stream try {attempt + 1}): {e}; retrying")
+                    _backoff(attempt)
+                    continue
+                raise
 
 
 if __name__ == "__main__":
