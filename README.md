@@ -34,10 +34,12 @@ Then connect your account once and run **`ghost`**:
 ```bash
 ghost-login        # browser login -> hands a session token back to this machine
 ghost              # chat (default = Hermes 405B via the OpenGradient TEE gateway, OHTTP-private)
+ghost --local      # force the fully-offline local model (no scrubber, no og-veil, nothing leaves)
 ```
 
 Inside, `/model` switches between the hosted line-up (Hermes 4 405B / 70B) and the
-fully-local 32B. Optional install config via env:
+fully-local model. `--local` does the same in one shot (requires a local install, `GHOST_LOCAL=1`).
+Optional install config via env:
 
 ```bash
 GHOST_PROXY=1      ./install.sh   # opt in to the Webshare rotating proxy (IP-mask the relay; off by default)
