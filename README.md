@@ -1,15 +1,18 @@
 # ghost
 
-**An incognito, uncensored agentic harness.** Censorship-resistant open intelligence that
-defaults to a frontier model over a hardened privacy path, drops to a fully-offline
-local model on demand, and phones home to no one.
+**An incognito, unrestricted agentic harness.** Censorship-resistant open intelligence that
+runs a frontier open model over a hardened privacy path, drops to a fully-offline local
+model on demand, and phones home to no one.
 
-ghost is a **standalone, debranded fork** of the [Hermes Agent](https://hermes-agent.nousresearch.com)
-engine. It runs its own engine at `~/.ghost-engine` (your normie `hermes` install is left
-completely untouched), launches as the `ghost` command, and sends every hosted request through a
-PII/secret scrubber and then through **[og-veil](https://github.com/OpenGradient/veil)**, which
-relays it over **Oblivious HTTP (OHTTP) to the OpenGradient chat-api TEE gateway** -- the same
-private path the [chat.opengradient.ai](https://chat.opengradient.ai) website uses.
+ghost is built on the [Hermes Agent](https://hermes-agent.nousresearch.com) engine by Nous
+Research, wrapped to route inference through OpenGradient's private TEE gateway. It keeps its
+own engine copy at `~/.ghost-engine` (so any existing `hermes` install is left untouched),
+launches as the `ghost` command, and sends every hosted request through a PII/secret scrubber
+and then through **[og-veil](https://github.com/OpenGradient/veil)**, which relays it over
+**Oblivious HTTP (OHTTP) to the OpenGradient chat-api TEE gateway** -- the same private path the
+[chat.opengradient.ai](https://chat.opengradient.ai) website uses. Only genuinely unrestricted,
+open-weight models are offered (the Hermes family); closed, refusing models are deliberately
+left out.
 
 > **Uncensored by default.** ghost answers everything. The privacy layer governs what leaks
 > *out*, never what ghost can *do*. Nothing is filtered, moralized, or redacted in its replies.
@@ -18,9 +21,9 @@ private path the [chat.opengradient.ai](https://chat.opengradient.ai) website us
 
 ## Quickstart
 
-One command installs **everything** -- Ollama, the Hermes engine, the local models, the forked +
-debranded engine, the privacy stack, and the `ghost` + `ghost-login` commands. Idempotent
-(safe to re-run):
+One command installs **everything** -- the Hermes engine forked into `~/.ghost-engine` and
+Ghost-branded, the privacy stack, and the `ghost` + `ghost-login` commands. (Local models via
+Ollama are opt-in: add `GHOST_LOCAL=1`.) Idempotent (safe to re-run):
 
 ```bash
 unzip ghost.zip -d ~/ghost && cd ~/ghost && ./install.sh
@@ -33,7 +36,7 @@ ghost-login        # browser login -> hands a session token back to this machine
 ghost              # chat (default = Hermes 405B via the OpenGradient TEE gateway, OHTTP-private)
 ```
 
-Inside, `/model` switches between the hosted line-up (Hermes, Claude, GPT, Gemini, Grok) and the
+Inside, `/model` switches between the hosted line-up (Hermes 4 405B / 70B) and the
 fully-local 32B. Optional install config via env:
 
 ```bash
@@ -79,7 +82,7 @@ ghost runs one of two kinds of model, a deliberate privacy/capability trade:
 
 | | **Default: hosted (Hermes 405B + others)** | **Fallback / on-demand: local 32B** |
 |---|---|---|
-| Model | `nous/hermes-4-405b` (and Claude/GPT/Gemini/Grok) via the TEE gateway | `uncensored-local` (Qwen2.5-32B-abliterated, Q6) |
+| Model | `nous/hermes-4-405b` / `nous/hermes-4-70b` via the TEE gateway | `uncensored-local` (Qwen2.5-32B-abliterated, Q6) |
 | Where it runs | An OpenGradient TEE enclave, reached scrubber → OHTTP → chat-api relay | Your machine, fully offline |
 | Privacy | IP hidden from the enclave, content hidden from the relay, PII/secrets scrubbed, **but account-linked to your OpenGradient login** | **True incognito -- nothing leaves the box** |
 | Strength | Frontier agentic quality; pick any hosted model with `/model` | Weaker agentic searcher; clean, uncensored prose |
@@ -95,7 +98,7 @@ The default is the hosted Hermes 405B because it is the stronger agent; the OHTT
 | Layer | Behaviour |
 |---|---|
 | **Default model** | `nous/hermes-4-405b` via the `opengradient` provider -- scrubber (`:8788`) → og-veil (`:11435`) → chat-api relay → TEE gateway |
-| **Hosted line-up** | Hermes 4 (405B/70B), Claude (Fable 5 / Opus / Sonnet / Haiku), GPT-5.x, Gemini 3.5/2.5, Grok 4.x, Seed -- all over the one OHTTP path |
+| **Hosted line-up** | Hermes 4 (405B / 70B) -- unrestricted, open-weight models only, over the one OHTTP path. Closed/refusing models (Claude, GPT, Gemini, Grok) are deliberately not offered. |
 | **Fallback model** | `fallback_model` → local `uncensored-local` (32B) if the hosted gateway is unreachable |
 | **Tool / auxiliary model** | Local 7B abliterated (`ghost-tool`) runs titling, compression, triage -- never a hosted provider |
 | **Auth** | A Supabase session from `ghost-login` (browser), held + auto-refreshed by og-veil. The relay authenticates it; the enclave never sees it |
@@ -106,17 +109,17 @@ The default is the hosted Hermes 405B because it is the stronger agent; the OHTT
 | **Web search** | Local `ddgs` → engines (direct), or via the rotating proxy when `GHOST_PROXY=1`. No third-party search API sees the query |
 | **Memory / telemetry** | Off / none. Catalog served locally; brightdata + codex MCPs removed; TTS local (piper) |
 | **Skills** | Created/installed skills go to `~/.ghost/skills-ghost` -- isolated from your normie `hermes` |
-| **Branding** | Forked engine fully debranded -- **GHOST** banner, 👻 figure, all visible text reads Ghost |
+| **Interface** | Ghost-branded over the Hermes engine -- **GHOST** banner, 👻 figure, all visible text reads Ghost |
 
 ---
 
 ## Architecture
 
 ```
-  ghost  ──►  ~/.ghost-engine  (standalone, debranded fork; normie `hermes` untouched)
+  ghost  ──►  ~/.ghost-engine  (its own engine copy; any `hermes` install untouched)
                  │
                  │   default (any hosted model)
-                 ├─ Hermes 405B / Claude / GPT / Gemini / Grok
+                 ├─ Hermes 405B / 70B (unrestricted, open-weight)
                  │     └─► scrubber (:8788)  [scrub name/keys, strip provider prefix]
                  │           └─► og-veil (:11435)  [HPKE-encrypt, OHTTP, verify]
                  │                 └─► [rotating proxy (:8899), IP hidden — opt-in GHOST_PROXY]  ─► chat-api /api/v1/chat/ohttp
@@ -183,19 +186,21 @@ path still runs.
 
 ## Install
 
-**One command installs everything** -- [Ollama](https://ollama.com), the
-[Hermes Agent](https://hermes-agent.nousresearch.com) engine, the local models, the forked +
-debranded engine, the privacy stack (og-veil + httpx), and the `ghost` +
-`ghost-login` commands. Idempotent (safe to re-run):
+**One command installs everything** -- the
+[Hermes Agent](https://hermes-agent.nousresearch.com) engine forked into `~/.ghost-engine` and
+Ghost-branded, the privacy stack (og-veil + httpx), and the `ghost` + `ghost-login` commands.
+(Local models via [Ollama](https://ollama.com) are opt-in: add `GHOST_LOCAL=1`.) Idempotent
+(safe to re-run):
 
 ```bash
 ./install.sh
 ```
 
-The default is the **direct** private setup: it auto-installs prerequisites, pulls the local models,
-starts the scrubber + og-veil, forks + debrands the engine into `~/.ghost-engine`, offers to run the
-account login, installs `ghost`, and smoke-tests it. No proxy is set up; og-veil talks to chat-api
-directly (content is still private via OHTTP/TEE).
+The default is the **direct, hosted-only** private setup: it auto-installs prerequisites,
+starts the scrubber + og-veil, forks the engine into `~/.ghost-engine` and applies Ghost
+branding, offers to run the account login, installs `ghost`, and smoke-tests it. No proxy is set
+up; og-veil talks to chat-api directly (content is still private via OHTTP/TEE). Local models
+are opt-in (`GHOST_LOCAL=1`).
 
 **Config modes (optional env vars):**
 

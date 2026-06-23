@@ -167,6 +167,15 @@ def test_stream_local_tool_restores_secret():
     assert ph not in text
 
 
+def test_catalog_is_unrestricted_only():
+    # ghost must only offer/allow genuinely unrestricted models (Hermes); no closed/refusing ones.
+    allowed = sp._ALLOWED_GATEWAY_MODELS
+    assert allowed == {"hermes-4-405b", "hermes-4-70b"}
+    blob = json.dumps(sp._CATALOG_MODELS).lower()
+    for closed in ("claude", "gpt", "gemini", "grok", "openai", "anthropic", "seed"):
+        assert closed not in blob, f"closed model '{closed}' must not be in the catalog"
+
+
 def test_stream_external_tool_keeps_placeholder():
     mapping = {}
     _, mapping, _ = presidio_scrub.anonymize(f"contact {EMAIL}", mapping, pii=True)
