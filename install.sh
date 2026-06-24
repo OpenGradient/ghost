@@ -221,7 +221,7 @@ GL="$HOME/.local/bin/ghost-login"   # thin wrapper over `og-veil login` (install
 if "$GL" --status >/dev/null 2>&1; then
   echo "   already connected: $("$GL" --status)"
 else
-  echo "   Hosted models (the default Hermes 405B + Claude/GPT/Gemini/Grok) need a one-time login."
+  echo "   Hosted models (the default DeepSeek V4 Pro + Hermes/GLM, all open-weight) need a one-time login."
   if [ -t 0 ]; then
     printf "   Run the browser login now? [Y/n] "; read -r ANS || true
     case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) "$GL" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac

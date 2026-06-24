@@ -30,7 +30,7 @@ toolsets:
 - hermes-cli
 max_concurrent_sessions: null
 agent:
-  max_turns: 40
+  max_turns: 200
   gateway_timeout: 1800
   restart_drain_timeout: 60
   api_max_retries: 3
