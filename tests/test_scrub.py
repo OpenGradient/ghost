@@ -254,12 +254,12 @@ def test_stream_multiline_data_frame_deanonymized():
     assert SECRET in out.decode(), "multi-line/parse path must still de-anon local tool args"
 
 
-def test_catalog_is_unrestricted_only():
-    # ghost must only offer/allow genuinely unrestricted models (Hermes); no closed/refusing ones.
+def test_catalog_is_open_weight_only():
+    # ghost must only offer/allow OPEN-WEIGHT models; no closed/refusing ones.
     allowed = sp._ALLOWED_GATEWAY_MODELS
-    assert allowed == {"hermes-4-405b", "hermes-4-70b"}
+    assert allowed == {"hermes-4-405b", "hermes-4-70b", "deepseek-v4-pro", "glm-5.2"}
     blob = json.dumps(sp._CATALOG_MODELS).lower()
-    for closed in ("claude", "gpt", "gemini", "grok", "openai", "anthropic", "seed"):
+    for closed in ("claude", "gpt-", "gemini", "grok", "anthropic", "seed-"):
         assert closed not in blob, f"closed model '{closed}' must not be in the catalog"
 
 

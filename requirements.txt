@@ -1,4 +1,5 @@
 # ghost privacy stack -- pinned so the load-bearing OHTTP/HPKE/TEE-verify boundary
 # (opengradient-veil) cannot change under us on a re-install. Bump deliberately.
-opengradient-veil>=0.2.6,<0.3
+# 0.2.7 pulls opengradient SDK 1.1.1, whose model enum includes deepseek-v4-pro.
+opengradient-veil>=0.2.7,<0.3
 httpx>=0.27

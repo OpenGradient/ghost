@@ -59,14 +59,21 @@ except Exception:
     presidio_scrub = None
     _PRESIDIO_OK = False
 
-# Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so
-# it only offers genuinely unrestricted (open-weight, steerable) models -- the Hermes family.
-# Closed, safety-tuned models (Claude, GPT, Gemini, Grok, Seed) defeat the point: they refuse,
-# moralize, and can't be steered, so they are deliberately NOT offered even though the gateway
-# can serve them. This list is the single source of truth for both the picker and the bridge's
-# allow-list (see _ALLOWED_GATEWAY_MODELS) -- to add a model, it must be actually unrestricted.
+# Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so it
+# only offers OPEN-WEIGHT, steerable models. Closed, safety-tuned refusers (Claude, GPT, Gemini,
+# Grok, Seed) are served by the gateway but deliberately excluded -- they refuse/moralize and
+# can't be steered. This list is the single source of truth for both the picker and the bridge's
+# allow-list (_ALLOWED_GATEWAY_MODELS).
+#
+# SUPPORTED-MODEL REFERENCE (gateway-verified by probing /v1/chat/completions, 2026-06-24):
+# the gateway's open-weight models are hermes-4-405b, hermes-4-70b, deepseek-v4-pro, glm-5.2.
+# NOTE: `og-veil models` is INCOMPLETE -- it omits deepseek-v4-pro and glm-5.2 even though the
+# gateway serves them. Do NOT trust that list to add a model; probe the endpoint. The gateway
+# rejects anything it doesn't serve with `Model '<id>' is not supported`.
 _CATALOG_MODELS = [
-    ("nous/hermes-4-405b", "Hermes 4 405B — flagship open model, steerable & unrestricted (default)"),
+    ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable (default)"),
+    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work"),
+    ("z-ai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
 
