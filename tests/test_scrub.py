@@ -36,15 +36,17 @@ def presidio_on(tmp_path, monkeypatch):
     marker.write_text("")
     monkeypatch.setattr(sp, "PRESIDIO_MARKER", str(marker))
     monkeypatch.setattr(sp, "_PRESIDIO_OK", True)
-    monkeypatch.setattr(sp, "NO_SCRUB_SENTINEL", str(tmp_path / ".no_scrub"))  # absent -> pii on
+    scrub = tmp_path / ".scrub"; scrub.write_text("")  # present -> scrubbing ON (opt-in)
+    monkeypatch.setattr(sp, "SCRUB_SENTINEL", str(scrub))
     monkeypatch.setattr(sp, "FULL_REDACTION_SENTINEL", str(tmp_path / ".full_redaction"))
 
 
 @pytest.fixture
 def presidio_off(tmp_path, monkeypatch):
-    """Force the legacy regex path (Presidio marker absent)."""
+    """Force the legacy regex path (Presidio marker absent), scrubbing ON."""
     monkeypatch.setattr(sp, "PRESIDIO_MARKER", str(tmp_path / ".presidio"))  # absent
-    monkeypatch.setattr(sp, "NO_SCRUB_SENTINEL", str(tmp_path / ".no_scrub"))
+    scrub = tmp_path / ".scrub"; scrub.write_text("")  # present -> scrubbing ON (opt-in)
+    monkeypatch.setattr(sp, "SCRUB_SENTINEL", str(scrub))
     monkeypatch.setattr(sp, "FULL_REDACTION_SENTINEL", str(tmp_path / ".full_redaction"))
 
 
@@ -101,12 +103,15 @@ def test_canary_secret_never_leaves_box_pii_on(presidio_on):
     assert any(v == SECRET for v in mapping.values())
 
 
-def test_canary_secret_never_leaves_box_pii_off(presidio_on, monkeypatch):
-    # PII off (the user's default): names may pass, but SECRETS must STILL never leave.
-    monkeypatch.setattr(sp, "NO_SCRUB_SENTINEL", os.devnull)  # exists -> pii off
-    obj, _, _ = sp._anonymize_request(_request_with_secret_everywhere())
+def test_default_off_is_full_fidelity(presidio_on, tmp_path, monkeypatch):
+    # DEFAULT = no .scrub marker: nothing is redacted, so the agent keeps full fidelity
+    # (it can read/use secrets during real work, e.g. authorized pentesting). Privacy of the
+    # hosted path still comes from og-veil's OHTTP + TEE, not from this bridge.
+    monkeypatch.setattr(sp, "SCRUB_SENTINEL", str(tmp_path / ".absent"))  # absent -> scrub off
+    obj, n, mapping = sp._anonymize_request(_request_with_secret_everywhere())
     wire = json.dumps(obj)
-    assert SECRET not in wire, "SECRET leaked with PII off (secrets must always be scrubbed)"
+    assert SECRET in wire, "with scrubbing off (default), the real secret must pass through"
+    assert n == 0 and mapping == {}, "scrub-off must be a pure pass-through"
 
 
 def test_canary_legacy_path_also_scrubs_whole_body(presidio_off):

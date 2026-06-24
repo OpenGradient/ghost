@@ -20,6 +20,8 @@
 #   GHOST_LOCAL=1        also install Ollama + a local model for an offline / true-incognito
 #                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 70B)
 #   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
+#   GHOST_SCRUB=1        opt in to OUTBOUND PII + secret redaction (OFF by default -- ghost is a
+#                        full-fidelity agent; og-veil's OHTTP+TEE provides the privacy regardless)
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
@@ -139,6 +141,23 @@ else
 fi
 [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
 cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
+# Outbound PII + secret redaction is OPT-IN (GHOST_SCRUB=1), OFF by default: ghost is a
+# full-fidelity agent and og-veil's OHTTP+TEE already make the hosted path private. The .scrub
+# marker drives the bridge; the engine's redact_secrets/redact_pii follow the same default.
+if [ -n "${GHOST_SCRUB:-}" ]; then
+  : > "$PRIV/.scrub"
+  "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"(?m)^  redact_secrets: false$", "  redact_secrets: true", s)
+s = re.sub(r"(?m)^  redact_pii: false$", "  redact_pii: true", s)
+open(p, "w").write(s)
+PYEOF
+  say "Outbound PII + secret redaction ON (GHOST_SCRUB)"
+else
+  rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
+  say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
+fi
 mkdir -p "$LA"
 
 # The scrubber runs as a launchd service; og-veil talks to chat-api directly (content is
@@ -198,5 +217,5 @@ say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
 echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
 echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
-echo "   Personalize $PRIV/pii_denylist.txt with your name/email/handles for the hosted-path scrubber."
+echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
 echo "   Not connected yet? Run:  ghost-login"

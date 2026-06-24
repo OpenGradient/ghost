@@ -22,13 +22,14 @@ unset ANTHROPIC_API_KEY
 PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
-# --no-scrub / --scrub: persistent toggle for name/PII redaction. Secrets (API keys, JWTs,
-# private keys) are ALWAYS scrubbed regardless. Turn off when redaction mangles an essential
-# query (e.g. your own domain in the prompt). State persists across runs; status line shows it.
-NOSCRUB_MARK="__GHOST_HOME__/privacy/.no_scrub"
+# --scrub / --no-scrub: persistent toggle for OUTBOUND PII + secret redaction. OFF BY DEFAULT --
+# ghost is a full-fidelity agent (so it can do real work, incl. authorized pentesting, without its
+# own privacy layer mangling secrets it reads). og-veil still OHTTP-encrypts + TEE-isolates the
+# hosted path regardless. Turn it ON only to strip your own name/secrets before the gateway.
+SCRUB_MARK="__GHOST_HOME__/privacy/.scrub"
 case "${1:-}" in
-  --no-scrub|--noscrub) : > "$NOSCRUB_MARK"; shift ;;
-  --scrub) rm -f "$NOSCRUB_MARK"; shift ;;
+  --scrub) : > "$SCRUB_MARK"; shift ;;
+  --no-scrub|--noscrub) rm -f "$SCRUB_MARK"; shift ;;
 esac
 
 # --preview "<text>": show exactly what the PII scrubber would redact (entity table +
@@ -87,7 +88,7 @@ else
   STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, $FB_DOWN"
 fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
-[ -f "$NOSCRUB_MARK" ] && STATUS="$STATUS · 🔓 PII redaction OFF (secrets still scrubbed)"
+if [ -f "$SCRUB_MARK" ]; then STATUS="$STATUS · 🔒 redaction ON (PII+secrets scrubbed outbound)"; else STATUS="$STATUS · 🔓 no redaction (full fidelity; og-veil still encrypts)"; fi
 # NER scrubber expected but failed to load -> regex fallback (names may not be scrubbed). Loud.
 [ -f "__GHOST_HOME__/privacy/.presidio_failed" ] && STATUS="$STATUS · ⚠️ NER scrubber OFF (regex fallback -- reinstall or check Presidio)"
 echo "$STATUS" >&2

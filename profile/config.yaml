@@ -352,7 +352,7 @@ dashboard:
     session_ttl_seconds: 0
   public_url: ''
 privacy:
-  redact_pii: true
+  redact_pii: false
 tts:
   provider: piper
   edge:
@@ -515,7 +515,7 @@ hooks_auto_accept: false
 personalities: {}
 security:
   allow_private_urls: false
-  redact_secrets: true
+  redact_secrets: false
   tirith_enabled: true
   tirith_path: tirith
   tirith_timeout: 5
