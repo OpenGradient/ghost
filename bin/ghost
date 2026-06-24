@@ -8,7 +8,6 @@
 # offline local model still runs.
 SCRUBBER="http://127.0.0.1:8788"
 VEIL="http://127.0.0.1:11435"
-PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
 SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
 export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine honors HERMES_HOME)
@@ -18,18 +17,23 @@ export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine h
 # infers through the OG TEE gateway and never needs this key.
 unset ANTHROPIC_API_KEY
 
+# `ghost update` -- pull the latest ghost + re-run the installer (idempotent). Intercepted here
+# so it doesn't fall through to the engine's own `update` (which only touches the base install).
+if [ "${1:-}" = "update" ]; then shift; exec "$HOME/.local/bin/ghost-update" "$@"; fi
+
 # --paths (or --code): path-aware mode -- let real filesystem paths reach the hosted model
 # for agentic file work; name + secrets in content are still scrubbed. Default off = full redaction.
 PASS_PATHS=""
 case "${1:-}" in --paths|--code) PASS_PATHS=1; shift ;; esac
 
-# --no-scrub / --scrub: persistent toggle for name/PII redaction. Secrets (API keys, JWTs,
-# private keys) are ALWAYS scrubbed regardless. Turn off when redaction mangles an essential
-# query (e.g. your own domain in the prompt). State persists across runs; status line shows it.
-NOSCRUB_MARK="__GHOST_HOME__/privacy/.no_scrub"
+# --scrub / --no-scrub: persistent toggle for OUTBOUND PII + secret redaction. OFF BY DEFAULT --
+# ghost is a full-fidelity agent (so it can do real work, incl. authorized pentesting, without its
+# own privacy layer mangling secrets it reads). og-veil still OHTTP-encrypts + TEE-isolates the
+# hosted path regardless. Turn it ON only to strip your own name/secrets before the gateway.
+SCRUB_MARK="__GHOST_HOME__/privacy/.scrub"
 case "${1:-}" in
-  --no-scrub|--noscrub) : > "$NOSCRUB_MARK"; shift ;;
-  --scrub) rm -f "$NOSCRUB_MARK"; shift ;;
+  --scrub) : > "$SCRUB_MARK"; shift ;;
+  --no-scrub|--noscrub) rm -f "$SCRUB_MARK"; shift ;;
 esac
 
 # --preview "<text>": show exactly what the PII scrubber would redact (entity table +
@@ -77,24 +81,18 @@ else
 fi
 
 # Privacy comes from og-veil: every request is HPKE/OHTTP-encrypted, so the relay only ever sees
-# ciphertext (the "via TEE gateway (OHTTP)" below). The relay still sees your IP; the OPTIONAL
-# rotating proxy (GHOST_PROXY=1, off by default) hides that too. Only surface an IP indicator
-# when the proxy is actually enabled (.proxy marker) -- no VPN noise in the default direct setup.
-NET=""
-if [ -f "__GHOST_HOME__/privacy/.proxy" ]; then
-  EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-  NET=" · ${EXIT_IP:+IP-masked via $EXIT_IP}"; [ -n "$EXIT_IP" ] || NET=" · proxy DOWN"
-fi
+# ciphertext (the "via TEE gateway (OHTTP)" below). The relay still sees your IP; for full
+# anonymity use the local model (ghost --local), which has zero egress.
 
 if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
-  STATUS="👻 ghost · $DEF_MODEL via TEE gateway (OHTTP/og-veil)${NET} · $LOGIN · $FB"
+  STATUS="👻 ghost · $DEF_MODEL via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
 elif [ "$HC" = "200" ]; then
   STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), $FB_DOWN"
 else
   STATUS="👻 ghost · ⚠️ scrubbing bridge DOWN (bridge=$HC) -- hosted unreachable, $FB_DOWN"
 fi
 [ -n "$PASS_PATHS" ] && STATUS="$STATUS · 🗂️ path-aware (real paths visible to hosted model)"
-[ -f "$NOSCRUB_MARK" ] && STATUS="$STATUS · 🔓 PII redaction OFF (secrets still scrubbed)"
+if [ -f "$SCRUB_MARK" ]; then STATUS="$STATUS · 🔒 redaction ON (PII+secrets scrubbed outbound)"; else STATUS="$STATUS · 🔓 no redaction (full fidelity; og-veil still encrypts)"; fi
 # NER scrubber expected but failed to load -> regex fallback (names may not be scrubbed). Loud.
 [ -f "__GHOST_HOME__/privacy/.presidio_failed" ] && STATUS="$STATUS · ⚠️ NER scrubber OFF (regex fallback -- reinstall or check Presidio)"
 echo "$STATUS" >&2

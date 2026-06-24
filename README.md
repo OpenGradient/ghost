@@ -1,273 +1,73 @@
-# ghost
+# ghost 👻
 
-**An incognito, unrestricted agentic harness.** Censorship-resistant open intelligence that
-runs a frontier open model over a hardened privacy path, drops to a fully-offline local
-model on demand, and phones home to no one.
+**A private, unrestricted agentic harness.** ghost is a real terminal agent -- it runs commands, edits files, executes code, and searches the web -- routing every hosted request through OpenGradient's private TEE gateway. It answers what you actually ask, in full, with no refusals or moralizing, and can drop to a fully-offline local model where nothing leaves the box. Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
 
-ghost is built on the [Hermes Agent](https://hermes-agent.nousresearch.com) engine by Nous
-Research, wrapped to route inference through OpenGradient's private TEE gateway. It keeps its
-own engine copy at `~/.ghost-engine` (so any existing `hermes` install is left untouched),
-launches as the `ghost` command, and sends every hosted request through a PII/secret scrubber
-and then through **[og-veil](https://github.com/OpenGradient/veil)**, which relays it over
-**Oblivious HTTP (OHTTP) to the OpenGradient chat-api TEE gateway** -- the same private path the
-[chat.opengradient.ai](https://chat.opengradient.ai) website uses. Only genuinely unrestricted,
-open-weight models are offered (the Hermes family); closed, refusing models are deliberately
-left out.
-
-> **Uncensored by default.** ghost answers everything. The privacy layer governs what leaks
-> *out*, never what ghost can *do*. Nothing is filtered, moralized, or redacted in its replies.
+<table>
+<tr><td><b>Private by construction</b></td><td>Every hosted request is HPKE/OHTTP-encrypted by <a href="https://github.com/OpenGradient/veil">og-veil</a> and run inside a TEE enclave: the relay sees only ciphertext and the enclave never sees who you are. Optional <code>ghost --scrub</code> also strips your name/secrets locally before encryption (off by default, so the agent keeps full fidelity for real work).</td></tr>
+<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B -- open-weight models only. The default is steered to drop the usual refusals; closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list.</td></tr>
+<tr><td><b>Verified responses</b></td><td>og-veil checks the enclave's signature on every response and refuses to emit a token it can't verify.</td></tr>
+<tr><td><b>Offline mode</b></td><td>Opt in with <code>GHOST_LOCAL=1</code> and switch with <code>ghost --local</code> -- a local abliterated model, zero egress, nothing leaves your machine.</td></tr>
+<tr><td><b>Relentless agent</b></td><td>Reads real errors, installs what it's missing, changes tactics, and keeps going until the task is done -- it doesn't stop to ask after one failure.</td></tr>
+<tr><td><b>No memory, no telemetry</b></td><td>Catalog served locally, web search via local <code>ddgs</code>, no third-party search account, isolated state in <code>~/.ghost</code>.</td></tr>
+</table>
 
 ---
 
-## Quickstart
+## Install & update
 
-One command installs **everything** -- the engine into `~/.ghost-engine` (Ghost-branded), the
-privacy stack, and the `ghost` + `ghost-login` commands. (Local models via Ollama are opt-in:
-add `GHOST_LOCAL=1`.) Idempotent (safe to re-run):
+**macOS only** (the privacy stack runs as launchd services). One deterministic command -- nothing agentic, no LLM in the loop -- installs everything (the engine into `~/.ghost-engine`, leaving any existing `hermes` install untouched; the privacy stack; the `ghost` / `ghost-login` / `ghost-update` commands). The **same command updates** an existing install, and it's idempotent + safe to re-run (it keeps your login, sessions, and denylist):
 
 ```bash
-unzip ghost.zip -d ~/ghost && cd ~/ghost && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
 ```
 
-Then connect your account once and run **`ghost`**:
+From a local clone it's just `./install.sh`; once installed, `ghost update` runs the same thing. Add options before the command, e.g. `GHOST_LOCAL=1 ...` (also install an offline local model), `GHOST_LOCAL_32B=1 ...` (the stronger 32B too, 26GB), or `GHOST_SCRUB=1 ...` (turn on outbound PII/secret redaction). By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks run hosted over the same private path.
+
+Then connect once and go:
 
 ```bash
-ghost-login        # browser login -> hands a session token back to this machine
-ghost              # chat (default = DeepSeek V4 Pro via the OpenGradient TEE gateway, OHTTP-private)
-ghost --local      # force the fully-offline local model (no scrubber, no og-veil, nothing leaves)
+ghost-login        # browser login -> session token for this machine
+ghost              # chat (default: DeepSeek V4 Pro via the TEE gateway)
+ghost --yolo       # auto-accept tool approvals (skip-permissions)
+ghost --resume <session_id>     # resume a past session  (find one with: ghost sessions browse)
+ghost --local      # force the offline local model (needs GHOST_LOCAL)
 ```
-
-Inside, `/model` switches between the hosted line-up (Hermes 4 405B / 70B) and the
-fully-local model. `--local` does the same in one shot (requires a local install, `GHOST_LOCAL=1`).
-Optional install config via env:
-
-```bash
-GHOST_PROXY=1      ./install.sh   # opt in to the Webshare rotating proxy (IP-mask the relay; off by default)
-GHOST_LOCAL=1      ./install.sh   # also install Ollama + a local model for an offline/incognito fallback
-GHOST_LOCAL_32B=1  ./install.sh   # pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
-```
-
-Local models are opt-in. By default ghost is hosted-only -- no Ollama, and the fallback + auxiliary
-tasks route to a hosted 70B over the same private og-veil path.
-
-Prerequisites are auto-installed; full details under [Install](#install) below.
 
 ---
 
-## How hosted models reach you
+## Models
 
-Hosted (non-local) models no longer go to Nous directly. They run through the **OpenGradient
-chat-api OHTTP relay to a TEE (Trusted Execution Environment) gateway**, resolved from the
-on-chain TEE registry. ghost no longer hand-rolls that protocol -- it delegates it to
-[og-veil](https://github.com/OpenGradient/veil) (the `opengradient-veil` package), the same
-implementation the chat-app and the `og-veil` CLI use:
+Switch with `/model` -- all open-weight, nothing closed or refusing:
+
+| Model | What it is |
+|---|---|
+| `deepseek/deepseek-v4-pro` **(default)** | Strongest open reasoning + coding model; best for agentic work. Uncensored via ghost's per-model steer. |
+| `nous/hermes-4-405b` | Flagship uncensored open model, most steerable. Also the hosted fallback. |
+| `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
+| local (opt-in) | Abliterated 7B (`ghost-tool`), or 32B (`uncensored-local`) with `GHOST_LOCAL_32B`. Fully offline. |
+
+---
+
+## How it stays private
+
+Every hosted request takes the same private path: ghost's local bridge hands it to [og-veil](https://github.com/OpenGradient/veil) (the `opengradient-veil` package, the same one the [chat.opengradient.ai](https://chat.opengradient.ai) site uses), which encrypts it and relays it over Oblivious HTTP to a TEE enclave:
 
 ```
 ghost engine
-  └─ hosted model ─► scrubber (:8788)   [scrub PII/secrets, strip provider prefix]
-                       └─► og-veil (:11435)   [HPKE-encrypt, OHTTP relay, verify]
-                             └─► chat-api /api/v1/chat/ohttp   [Supabase bearer; RELAY only]
-                                   └─► TEE gateway   [decrypts in-enclave, runs model, signs output]
+  └─ bridge (:8788)       strip provider prefix, model steer (+ PII/secret scrub if --scrub)
+       └─ og-veil (:11435)   HPKE-encrypt, OHTTP relay, verify signature before emit
+            └─ chat-api relay   sees your account token + IP, but only ciphertext
+                 └─ TEE enclave   decrypts, runs the model, signs the output
 ```
 
-Two boundaries, like the website: the **relay (chat-api)** sees your account token + IP but only
-ciphertext; the **enclave** sees the prompt but never your identity. The scrubber runs *before*
-og-veil encrypts, on plaintext localhost, so your name/email/secrets reach neither the relay nor
-the enclave. og-veil reads the TEE's HPKE key + RSA signing key from the on-chain registry and
-**verifies every response against that signing key before a single token is returned**.
-
----
-
-## Two modes
-
-ghost runs one of two kinds of model, a deliberate privacy/capability trade:
-
-| | **Default: hosted (Hermes 405B + others)** | **Fallback / on-demand: local 32B** |
-|---|---|---|
-| Model | `nous/hermes-4-405b` / `nous/hermes-4-70b` via the TEE gateway | `uncensored-local` (Qwen2.5-32B-abliterated, Q6) |
-| Where it runs | An OpenGradient TEE enclave, reached scrubber → OHTTP → chat-api relay | Your machine, fully offline |
-| Privacy | IP hidden from the enclave, content hidden from the relay, PII/secrets scrubbed, **but account-linked to your OpenGradient login** | **True incognito -- nothing leaves the box** |
-| Strength | Frontier agentic quality; pick any hosted model with `/model` | Weaker agentic searcher; clean, uncensored prose |
-| When | Always, if you're logged in and the gateway is reachable | Auto-fallback if hosted is unavailable, or via `/model` |
-
-The default is the hosted Hermes 405B because it is the stronger agent; the OHTTP path makes it
-"private but not anonymous." Switch to the local model any time you want **zero** egress.
-
----
-
-## What you get
-
-| Layer | Behaviour |
-|---|---|
-| **Default model** | `deepseek/deepseek-v4-pro` via the `opengradient` provider -- scrubber (`:8788`) → og-veil (`:11435`) → chat-api relay → TEE gateway (uncensored through ghost's steer; strongest open agentic model). `nous/hermes-4-405b` and the rest of the catalog via `/model`. |
-| **Hosted line-up** | Hermes 4 (405B / 70B) -- unrestricted, open-weight models only, over the one OHTTP path. Closed/refusing models (Claude, GPT, Gemini, Grok) are deliberately not offered. |
-| **Fallback model** | `fallback_model` → local `uncensored-local` (32B) if the hosted gateway is unreachable |
-| **Tool / auxiliary model** | Local 7B abliterated (`ghost-tool`) runs titling, compression, triage -- never a hosted provider |
-| **Auth** | A Supabase session from `ghost-login` (browser), held + auto-refreshed by og-veil. The relay authenticates it; the enclave never sees it |
-| **Encryption** | HPKE (DHKEM-X25519 / HKDF-SHA256 / ChaCha20-Poly1305) per request, done by og-veil; verification before emit |
-| **Registry** | og-veil reads the active TEE from the on-chain registry: endpoint, HPKE `ohttpConfig`, and RSA signing key |
-| **PII + secret scrubber** | Strips your name/email/handles **and** API keys, tokens, JWTs, private keys from outbound requests, before og-veil encrypts |
-| **Egress proxy** | **Opt-in** (`GHOST_PROXY=1`): a rotating residential exit hides your IP from the chat-api relay. Off by default (direct) |
-| **Web search** | Local `ddgs` → engines (direct), or via the rotating proxy when `GHOST_PROXY=1`. No third-party search API sees the query |
-| **Memory / telemetry** | Off / none. Catalog served locally; brightdata + codex MCPs removed; TTS local (piper) |
-| **Skills** | Created/installed skills go to `~/.ghost/skills-ghost` -- isolated from your normie `hermes` |
-| **Interface** | Ghost-branded over the Hermes engine -- **GHOST** banner, 👻 figure, all visible text reads Ghost |
-
----
-
-## Architecture
-
-```
-  ghost  ──►  ~/.ghost-engine  (its own engine copy; any `hermes` install untouched)
-                 │
-                 │   default (any hosted model)
-                 ├─ Hermes 405B / 70B (unrestricted, open-weight)
-                 │     └─► scrubber (:8788)  [scrub name/keys, strip provider prefix]
-                 │           └─► og-veil (:11435)  [HPKE-encrypt, OHTTP, verify]
-                 │                 └─► [rotating proxy (:8899), IP hidden — opt-in GHOST_PROXY]  ─► chat-api /api/v1/chat/ohttp
-                 │                       └─► TEE gateway  [decrypts in-enclave, runs model, signs]
-                 │   /model or auto-fallback
-                 ├─ local 32B (uncensored-local) ─────────────────────► offline, zero egress
-                 │
-                 ├─ web search ─► ddgs ─► [rotating proxy (:8899) if GHOST_PROXY] ─► search engines
-                 │
-                 └─ 12 auxiliary tasks ─► local 7B (ghost-tool)   (titling / compression / triage)
-
-  launchd keeps the services alive:  com.advait.hermes-pii-scrubber (scrubber)
-                                      com.advait.hermes-veil (og-veil; OHTTP/TEE/verify + auth)
-                                      com.advait.hermes-proxy (rotating proxy; only with GHOST_PROXY)
-```
-
-A launch preflight (`bin/ghost`) checks the scrubber `/healthz`, og-veil `/health`, your login
-status, and the proxy exit IP, and warns (never hard-blocks) if anything is down -- so the offline
-path still runs.
-
----
-
-## The privacy model -- what each layer actually protects
-
-- **Scrubber (`:8788`)** -- an OpenAI-compatible endpoint the engine talks to over plaintext
-  localhost. It redacts a denylist (your name/email/handles) + regex secrets (API keys, tokens,
-  JWTs, private keys) from request bodies, then forwards the cleaned request to og-veil. Outbound-
-  only: the local model never routes through it, so local replies are never scrubbed.
-- **og-veil (`:11435`)** -- the [`opengradient-veil`](https://github.com/OpenGradient/veil) package
-  owns the protocol: it reads the active TEE from the on-chain registry, **HPKE-encrypts** each
-  request, relays it over OHTTP to chat-api, and verifies the enclave's signature on every response
-  **before emitting a token** (verify-before-emit). One implementation, shared with the chat-app --
-  ghost no longer maintains its own copy.
-- **OHTTP / TEE split** -- chat-api is only a *relay*: it sees your bearer token + IP but the request
-  body is ciphertext it cannot read. The TEE enclave decrypts and runs the model but is reached
-  through the relay, so it never learns who you are. (By default ghost is **direct** -- the relay
-  sees your real IP; the content stays private regardless. Hide the IP too with the opt-in proxy below.)
-- **Rotating proxy (`:8899`) -- opt-in (`GHOST_PROXY=1`), off by default** -- picks a fresh Webshare
-  residential exit per connection, so the chat-api relay sees a rotating IP, never yours -- og-veil's
-  egress is routed through it. Also carries the engine's own egress (web search).
-- **Private search** -- when the proxy is enabled, `ddgs` honours `DDGS_PROXY` (it ignores
-  `HTTPS_PROXY`), so every query egresses through the rotating proxy to the engines; otherwise it
-  goes out directly. No search-API account either way.
-- **No memory, no telemetry** -- memory toolset off; model catalog served locally; gateway/update
-  calls blocked or removed.
-- **Skill + state isolation** -- ghost's skills live in their own dir; nothing it creates pollutes `hermes`.
-
----
-
-## Layout
-
-- `profile/` -- `config.yaml` (the full incognito profile), `SOUL.md` (the Ghost identity), `.env.example`, `pii_denylist.example.txt`, `uncensored_prefill.json`
-- `privacy/`
-  - `scrubbing_proxy.py` -- the PII/secret scrubber + local model-catalog endpoint; forwards cleaned requests to og-veil
-  - `scrub_patterns.py` -- single source of the secret + PII regexes (shared by both scrub paths)
-  - `presidio_scrub.py` -- NER PII detection (Presidio + spaCy) with reversible placeholders + stream de-anon
-  - `rotating_proxy.py` -- Webshare rotation (opt-in IP-masking)
-  - `ensure_scrubber_route.py` -- self-heals the engine's hosted route back to the scrubber after a token refresh
-  - _(the OHTTP/HPKE/registry/verification + Supabase auth that used to live here now comes from the `opengradient-veil` package -- run `og-veil`)_
-- `scripts/` -- `fork-engine.sh` (copy + relocate venv + isolate skills) and `debrand.py` (scrub visible strings + the two ASCII-art logos)
-- `launchd/` -- the scrubber + og-veil + rotating-proxy service templates
-- `bin/ghost` -- the launcher (privacy preflight) · `bin/ghost-login` -- account connect/refresh
-- `install.sh` -- end-to-end installer · `models.txt` -- the local models to pull
-
----
-
-## Install
-
-**One command installs everything** -- the engine into `~/.ghost-engine` (Ghost-branded), the
-privacy stack (og-veil + httpx), and the `ghost` + `ghost-login` commands.
-(Local models via [Ollama](https://ollama.com) are opt-in: add `GHOST_LOCAL=1`.) Idempotent
-(safe to re-run):
-
-```bash
-./install.sh
-```
-
-The default is the **direct, hosted-only** private setup: it auto-installs prerequisites,
-starts the scrubber + og-veil, installs the engine into `~/.ghost-engine` and applies Ghost
-branding, offers to run the account login, installs `ghost`, and smoke-tests it. No proxy is set
-up; og-veil talks to chat-api directly (content is still private via OHTTP/TEE). Local models
-are opt-in (`GHOST_LOCAL=1`).
-
-**Config modes (optional env vars):**
-
-```bash
-GHOST_PROXY=1      ./install.sh   # opt in to the Webshare rotating proxy (IP-mask the chat-api relay)
-GHOST_LOCAL=1      ./install.sh   # opt in to Ollama + a local model (offline/incognito fallback)
-GHOST_LOCAL_32B=1  ./install.sh   # pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
-GHOST_CHAT_APP_URL=https://...    # override the website used for ghost-login (default chat.opengradient.ai)
-```
-
-- **`GHOST_PROXY=1`** -- opt in to IP-masking: prompts for your Webshare proxy list, runs the rotating
-  proxy, and routes both og-veil's egress to chat-api and the engine's web-search egress through it, so
-  the relay sees a rotating IP instead of yours. Off by default (direct); the scrubber + personal PII
-  denylist run either way.
-
-After install, **connect your account** and personalize the scrubber denylist:
-
-```bash
-ghost-login                 # browser login (or: ghost-login --paste for headless)
-ghost-login --status        # who am I logged in as?
-# edit ~/.ghost/privacy/pii_denylist.txt with your name/email/handles
-```
-
-```bash
-ghost                       # chat (default = DeepSeek V4 Pro via the TEE gateway, OHTTP-private)
-ghost --yolo -z "..."       # one-shot
-ghost --paths "..."         # agentic file work: real filesystem paths reach the hosted model
-                            #   (your name + secrets in content are still scrubbed)
-# inside:  /model           -> switch between the hosted line-up and uncensored-local
-```
-
-### Agentic file work -- two ways
-
-By default the scrubber redacts everything outbound, **including filesystem paths** -- which
-breaks file ops on the hosted model (it sees `/Users/[REDACTED_PII]/...`). Two ways to do real
-file work:
-
-- **`ghost --paths`** -- flips on *path-aware* mode for that session: real paths pass through to the
-  hosted model so it can read/write files, while your name + secrets in prose are still scrubbed.
-  The trade is that your home/username becomes visible inside those paths.
-- **Local model** (`/model` → `uncensored-local`) -- never touches the scrubber/bridge, so paths are
-  always real and **nothing leaves the box**. Weaker agent, but the fully-private option.
+Two boundaries: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. Redaction is **off by default** so ghost stays full-fidelity (it can read and use secrets during real work, e.g. authorized pentesting); `ghost --scrub` turns on a local pass that strips your name/secrets before encryption. Either way the hosted path is **private, not anonymous**: your OpenGradient account is still authenticated and the relay sees your IP. For true anonymity, use the local model -- zero egress.
 
 ---
 
 ## Honest limits
 
-- **The hosted default is private, not anonymous.** chat-api still authenticates your OpenGradient
-  account. The scrubber hides your name/secrets and OHTTP hides your content from the relay -- but the
-  account link remains, and by default (direct) the relay also sees your real IP. Enable the opt-in
-  proxy (`GHOST_PROXY=1`) to mask the IP too. For zero-egress anonymity, switch to the **local 32B**
-  (`/model`) -- that is the true-incognito mode.
-- **Responses are verified before they reach you.** og-veil checks the enclave's signature on every
-  hosted response and refuses to emit a single token it can't verify (verify-before-emit) -- ghost no
-  longer carries its own best-effort `GHOST_TEE_VERIFY` knob; verification now lives in og-veil.
-- **The local fallback isn't perfectly offline under tool-use enforcement.** `tool_use_enforcement: true`
-  makes search reliable, but the 32B's agentic loop will lean on the hosted gateway for tool
-  orchestration (still scrubbed + OHTTP, but account-linked), and the 32B is a weak agentic searcher.
-- **Proxies are opt-in and trust-shifted.** ghost is direct by default (no proxy). With `GHOST_PROXY=1`,
-  Webshare sees your real IP unless you run a VPN in front. NordVPN on this Mac is GUI-only (no CLI), so
-  enable its auto-connect manually for the extra hop.
-- **The engine is forked, not rewritten.** Internal Python package names stay `hermes_cli` (invisible to
-  users). `hermes update` updates only the original install; re-run `scripts/fork-engine.sh` to pull
-  upstream changes into the fork.
+- **The local model is opt-in and weaker.** Off by default (install with `GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration under tool-use enforcement.
+- **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`, and `ghost update` (not `hermes update`) is what refreshes the fork.
 
 ---
 
@@ -277,5 +77,4 @@ file work:
 
 ## Security
 
-ghost is a privacy tool; a PII/secret leak is treated as a P0. See [SECURITY.md](SECURITY.md)
-for how to report one privately.
+ghost is a privacy tool; a PII/secret leak is treated as a P0. See [SECURITY.md](SECURITY.md) for how to report one privately.

@@ -30,7 +30,7 @@ toolsets:
 - hermes-cli
 max_concurrent_sessions: null
 agent:
-  max_turns: 40
+  max_turns: 200
   gateway_timeout: 1800
   restart_drain_timeout: 60
   api_max_retries: 3
@@ -352,7 +352,7 @@ dashboard:
     session_ttl_seconds: 0
   public_url: ''
 privacy:
-  redact_pii: true
+  redact_pii: false
 tts:
   provider: piper
   edge:
@@ -515,7 +515,7 @@ hooks_auto_accept: false
 personalities: {}
 security:
   allow_private_urls: false
-  redact_secrets: true
+  redact_secrets: false
   tirith_enabled: true
   tirith_path: tirith
   tirith_timeout: 5

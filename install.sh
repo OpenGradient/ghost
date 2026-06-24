@@ -13,16 +13,15 @@
 # website uses. After install, run `ghost-login` once to connect your account (a browser
 # login that hands a session token to og-veil).
 #
-# By default ghost runs DIRECT: the scrubber + og-veil talk to chat-api directly (content is
-# still private -- og-veil OHTTP-encrypts it and the TEE enclave separates identity). No
-# rotating-proxy setup is needed. IP-masking is opt-in (see GHOST_PROXY below).
+# The scrubber + og-veil talk to chat-api directly: content is private (og-veil OHTTP-encrypts
+# it and the TEE enclave separates identity), reached over your normal connection.
 #
 # Optional config via env (all optional -- plain `./install.sh` does the full private setup):
-#   GHOST_PROXY=1        opt in to the Webshare rotating proxy: masks your IP from the chat-api
-#                        relay (og-veil egress) + carries the engine's web-search egress
 #   GHOST_LOCAL=1        also install Ollama + a local model for an offline / true-incognito
 #                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 70B)
 #   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
+#   GHOST_SCRUB=1        opt in to OUTBOUND PII + secret redaction (OFF by default -- ghost is a
+#                        full-fidelity agent; og-veil's OHTTP+TEE provides the privacy regardless)
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
@@ -33,7 +32,20 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve where this script lives. When run via `curl ... | bash` there is no checkout, so
+# self-bootstrap: clone (or fast-forward) the repo into ~/.ghost-src and re-exec from there. This
+# makes ONE deterministic command both INSTALL and UPDATE ghost -- no manual clone, no LLM needed.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
+  command -v git >/dev/null 2>&1 || { echo "!! ghost needs git to fetch itself; install it (xcode-select --install) and re-run." >&2; exit 1; }
+  SRC="${GHOST_SRC_DIR:-$HOME/.ghost-src}"
+  if [ -d "$SRC/.git" ]; then
+    echo "==> Updating ghost source ($SRC)"; git -C "$SRC" pull --ff-only || git -C "$SRC" pull
+  else
+    echo "==> Fetching ghost into $SRC"; rm -rf "$SRC"; git clone https://github.com/OpenGradient/ghost.git "$SRC"
+  fi
+  exec bash "$SRC/install.sh" "$@"
+fi
 ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
 GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
 PROFILE="$GHOST_HOME/profiles/uncensored"
@@ -42,15 +54,24 @@ LA="$HOME/Library/LaunchAgents"
 ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-$(command -v python3 || true)}"
 SCRUBBER="http://127.0.0.1:8788"
-# Direct is the default. Opt in to the Webshare rotating proxy with GHOST_PROXY=1.
-# (GHOST_DIRECT is still honored for back-compat, but it's now the default anyway.)
-USE_PROXY="${GHOST_PROXY:-}"
 # Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
 # auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
 # path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
 # fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
 # since hosted-only is now the default.)
 WANT_LOCAL="${GHOST_LOCAL:-}"; [ -n "${GHOST_LOCAL_32B:-}" ] && WANT_LOCAL=1
+
+# Record the source path + the chosen install options so `ghost update` can re-pull and
+# re-install the exact same way (see bin/ghost-update).
+mkdir -p "$GHOST_HOME"
+echo "$REPO" > "$GHOST_HOME/.src"
+{
+  [ -n "${GHOST_LOCAL:-}" ] && echo "GHOST_LOCAL=1"
+  [ -n "${GHOST_LOCAL_32B:-}" ] && echo "GHOST_LOCAL_32B=1"
+  [ -n "${GHOST_SCRUB:-}" ] && echo "GHOST_SCRUB=1"
+  [ -n "${GHOST_CHAT_APP_URL:-}" ] && echo "GHOST_CHAT_APP_URL=$GHOST_CHAT_APP_URL"
+  :
+} > "$GHOST_HOME/.install-env"
 
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
@@ -115,14 +136,6 @@ mkdir -p "$PROFILE"
 sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
-if [ -n "$USE_PROXY" ]; then   # opt-in: route the engine's own egress (web search/fetches) through the rotating proxy
-  "$PYTHON" - "$PROFILE/.env" <<'PYEOF'
-import sys, re
-p = sys.argv[1]; s = open(p).read()
-s = re.sub(r"(?m)^#\s*((?:HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|DDGS_PROXY)=\S+)\s*$", r"\1", s)
-open(p, "w").write(s)
-PYEOF
-fi
 if [ -z "$WANT_LOCAL" ]; then   # hosted-only (default) -> route auxiliary + fallback to a hosted model via og-veil
   "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
 import sys, re
@@ -140,8 +153,8 @@ open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, au
 PYEOF
 fi
 
-# ---------- 3. privacy stack (PII scrubber + og-veil always; rotating proxy only with GHOST_PROXY) ----------
-say "Privacy stack (PII/secret scrubber -> og-veil${USE_PROXY:+ + rotating proxy})"
+# ---------- 3. privacy stack (PII scrubber + og-veil) ----------
+say "Privacy stack (PII/secret scrubber -> og-veil)"
 mkdir -p "$PRIV"
 cp "$REPO"/privacy/*.py "$PRIV/"
 # Enable the NER PII scrubber when Presidio + the spaCy model are present; else leave it off
@@ -153,24 +166,29 @@ else
 fi
 [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
 cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
+# Outbound PII + secret redaction is OPT-IN (GHOST_SCRUB=1), OFF by default: ghost is a
+# full-fidelity agent and og-veil's OHTTP+TEE already make the hosted path private. The .scrub
+# marker drives the bridge; the engine's redact_secrets/redact_pii follow the same default.
+if [ -n "${GHOST_SCRUB:-}" ]; then
+  : > "$PRIV/.scrub"
+  "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"(?m)^  redact_secrets: false$", "  redact_secrets: true", s)
+s = re.sub(r"(?m)^  redact_pii: false$", "  redact_pii: true", s)
+open(p, "w").write(s)
+PYEOF
+  say "Outbound PII + secret redaction ON (GHOST_SCRUB)"
+else
+  rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
+  say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
+fi
 mkdir -p "$LA"
 
-# The scrubber always runs. The Webshare rotating proxy is OPT-IN (GHOST_PROXY=1):
-# by default ghost is direct -- og-veil talks to chat-api itself (content is still
-# private via OHTTP/TEE; only IP-masking is skipped).
+# The scrubber runs as a launchd service; og-veil talks to chat-api directly (content is
+# still private via OHTTP/TEE). Clean up any rotating-proxy marker from an older install.
 BASE_SERVICES="hermes-pii-scrubber"
-if [ -n "$USE_PROXY" ]; then
-  if [ ! -s "$GHOST_HOME/webshare_proxies.txt" ]; then
-    echo "   Paste your Webshare proxy-list download URL (ip:port:user:pass), or Enter to skip:"
-    read -r WS_URL || true
-    [ -n "${WS_URL:-}" ] && curl -fsSL "$WS_URL" -o "$GHOST_HOME/webshare_proxies.txt" && echo "   $(wc -l <"$GHOST_HOME/webshare_proxies.txt"|tr -d ' ') proxies"
-  fi
-  BASE_SERVICES="hermes-proxy $BASE_SERVICES"
-  : > "$PRIV/.proxy"   # marker: egress is IP-masked through the rotating proxy (banner reads this)
-else
-  rm -f "$PRIV/.proxy"
-  say "Direct mode (default) -- og-veil talks to chat-api directly; no rotating proxy. Set GHOST_PROXY=1 to IP-mask."
-fi
+rm -f "$PRIV/.proxy"
 
 for svc in $BASE_SERVICES; do
   sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
@@ -179,23 +197,9 @@ for svc in $BASE_SERVICES; do
 done
 
 # og-veil service (port 11435, to avoid colliding with Ollama on 11434). It owns the
-# OHTTP/TEE/verification + auth. Default: direct egress to chat-api. With GHOST_PROXY=1
-# its egress is routed through the rotating proxy so the relay never sees your real IP.
-if [ -n "$USE_PROXY" ]; then
-  VEIL_PROXY_ENV=$'        <key>HTTPS_PROXY</key>\n        <string>http://127.0.0.1:8899</string>\n        <key>HTTP_PROXY</key>\n        <string>http://127.0.0.1:8899</string>\n        <key>NO_PROXY</key>\n        <string>127.0.0.1,localhost,::1</string>'
-else
-  VEIL_PROXY_ENV=""
-fi
+# OHTTP/TEE/verification + auth, and talks to chat-api directly.
 VEIL_PLIST="$LA/com.advait.hermes-veil.plist"
-GP_PYTHON="$PYTHON" GP_HOME="$HOME" GP_PROXY_ENV="$VEIL_PROXY_ENV" \
-  "$PYTHON" - "$REPO/launchd/com.advait.hermes-veil.plist" "$VEIL_PLIST" <<'PYEOF'
-import os, sys
-src, dst = sys.argv[1], sys.argv[2]
-s = open(src).read()
-s = s.replace("__PYTHON__", os.environ["GP_PYTHON"]).replace("__HOME__", os.environ["GP_HOME"])
-s = s.replace("__VEIL_PROXY_ENV__", os.environ.get("GP_PROXY_ENV", ""))
-open(dst, "w").write(s)
-PYEOF
+sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.hermes-veil.plist" > "$VEIL_PLIST"
 launchctl unload "$VEIL_PLIST" 2>/dev/null || true
 launchctl load -w "$VEIL_PLIST"
 
@@ -208,12 +212,13 @@ for _ in $(seq 1 20); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 
 say "Forking + debranding the engine -> $ENG"
 GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$SRC" bash "$REPO/scripts/fork-engine.sh"
 
-# ---------- 5. the ghost + ghost-login commands ----------
-say "Installing the ghost + ghost-login commands"
+# ---------- 5. the ghost + ghost-login + ghost-update commands ----------
+say "Installing the ghost + ghost-login + ghost-update commands"
 mkdir -p "$HOME/.local/bin"
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
-chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login"
+sed -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-update" > "$HOME/.local/bin/ghost-update"
+chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login" "$HOME/.local/bin/ghost-update"
 
 # ---------- 6. connect your account (hosted models) ----------
 say "Connect your OpenGradient Chat account (for hosted models)"
@@ -221,7 +226,7 @@ GL="$HOME/.local/bin/ghost-login"   # thin wrapper over `og-veil login` (install
 if "$GL" --status >/dev/null 2>&1; then
   echo "   already connected: $("$GL" --status)"
 else
-  echo "   Hosted models (the default Hermes 405B + Claude/GPT/Gemini/Grok) need a one-time login."
+  echo "   Hosted models (the default DeepSeek V4 Pro + Hermes 4, all open-weight) need a one-time login."
   if [ -t 0 ]; then
     printf "   Run the browser login now? [Y/n] "; read -r ANS || true
     case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) "$GL" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac
@@ -238,6 +243,5 @@ say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
 echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
 echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
-echo "   Personalize $PRIV/pii_denylist.txt with your name/email/handles for the hosted-path scrubber."
-[ -n "$USE_PROXY" ] || echo "   Direct mode (default). For IP-masking from the relay, reinstall with GHOST_PROXY=1."
+echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
 echo "   Not connected yet? Run:  ghost-login"

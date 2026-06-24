@@ -23,7 +23,6 @@
     <dict>
         <key>OG_VEIL_PORT</key>
         <string>11435</string>
-__VEIL_PROXY_ENV__
     </dict>
     <key>StandardOutPath</key>
     <string>__HOME__/.ghost/privacy/veil.out.log</string>

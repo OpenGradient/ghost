@@ -62,8 +62,9 @@ except Exception:
 # Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so it
 # only offers OPEN-WEIGHT, steerable models. Closed, safety-tuned refusers (Claude, GPT, Gemini,
 # Grok, Seed) are served by the gateway but deliberately excluded -- they refuse/moralize and
-# can't be steered. This list is the single source of truth for both the picker and the bridge's
-# allow-list (_ALLOWED_GATEWAY_MODELS).
+# can't be steered. GLM-5.2 is open-weight but excluded for the same reason: the gateway injects a
+# safety system prompt for it that the steer can't override (verified 2026-06-24). This list is the
+# single source of truth for both the picker and the bridge's allow-list (_ALLOWED_GATEWAY_MODELS).
 #
 # SUPPORTED-MODEL REFERENCE (gateway-verified by probing /v1/chat/completions, 2026-06-24):
 # the gateway's open-weight models are hermes-4-405b, hermes-4-70b, deepseek-v4-pro, glm-5.2.
@@ -73,7 +74,6 @@ except Exception:
 _CATALOG_MODELS = [
     ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work (default)"),
     ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable"),
-    ("zai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
 
@@ -105,13 +105,15 @@ def log(m):
 from scrub_patterns import EMAIL_RE, SSN_RE, CC_RE, IP_RE, PHONE_RE, SECRET_RES  # noqa: E402
 
 PASS_PATHS_SENTINEL = os.path.expanduser("~/.ghost/privacy/.pass_paths")
-# Filesystem paths are protected from redaction by DEFAULT so agentic file work is
-# not blinded: the user's name often appears inside ~/ paths, and redacting it to
-# [REDACTED_PII] breaks path navigation. Names/secrets in prose are still scrubbed.
-# Create ~/.ghost/privacy/.full_redaction to redact paths too (maximum privacy).
+# Redaction is OPT-IN and OFF BY DEFAULT. ghost is a full-fidelity agent (it does real work,
+# including authorized pentesting, so its own privacy layer must NOT silently mangle secrets it
+# legitimately reads). The ~/.ghost/privacy/.scrub marker (ghost --scrub) turns ON outbound
+# PII + secret redaction; absent (default) = pure pass-through. Privacy of the hosted path comes
+# from og-veil (OHTTP + TEE enclave) regardless of this toggle.
+SCRUB_SENTINEL = os.path.expanduser("~/.ghost/privacy/.scrub")
+# When scrubbing IS on, filesystem paths are protected from redaction by default so agentic file
+# work is not blinded. Create ~/.ghost/privacy/.full_redaction to redact paths too.
 FULL_REDACTION_SENTINEL = os.path.expanduser("~/.ghost/privacy/.full_redaction")
-NO_SCRUB_SENTINEL = os.path.expanduser("~/.ghost/privacy/.no_scrub")  # PII redaction is OPTIONAL: this marker (ghost --no-scrub) turns off name/PII
-# redaction; secrets (API keys, JWTs, private keys) are ALWAYS scrubbed regardless.
 PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
 
@@ -186,10 +188,10 @@ def _walk_strings(node, fn):
 
 def scrub_body(obj):
     """Legacy regex scrubber over the WHOLE request body (used when Presidio is off / fails)."""
-    if not isinstance(obj, dict):
-        return obj, 0
+    if not isinstance(obj, dict) or not os.path.exists(SCRUB_SENTINEL):
+        return obj, 0  # scrubbing is opt-in (.scrub marker); default = pass-through
     pp = not os.path.exists(FULL_REDACTION_SENTINEL)  # default: protect filesystem paths
-    pii = not os.path.exists(NO_SCRUB_SENTINEL)  # PII redaction optional; secrets always scrubbed
+    pii = True  # when scrubbing is on, redact both PII and secrets
     total = 0
 
     def fn(s):
@@ -202,14 +204,16 @@ def scrub_body(obj):
 
 
 def _anonymize_request(obj):
-    """Anonymize the request body -> (obj, count, mapping). With Presidio enabled (.presidio
-    marker) use NER + reversible placeholders, returning {placeholder: original} for response
-    de-anonymization. Otherwise, or on any error, fall back to the legacy regex scrubber."""
+    """Anonymize the request body -> (obj, count, mapping). Redaction is OPT-IN: with no .scrub
+    marker (default) this is a pure pass-through (full fidelity). With .scrub on and Presidio
+    enabled (.presidio marker) use NER + reversible placeholders; else the legacy regex scrubber."""
+    if not os.path.exists(SCRUB_SENTINEL):
+        return obj, 0, {}  # scrubbing opt-in; default = pass-through
     if not (_PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER)):
         obj, n = scrub_body(obj)
         return obj, n, {}
     try:
-        pii = not os.path.exists(NO_SCRUB_SENTINEL)
+        pii = True  # scrubbing is on -> redact PII + secrets
         mapping, total = {}, 0
 
         def fn(s):
@@ -309,10 +313,9 @@ def _apply_model_steer(obj):
 
 
 # ── Upstream: og-veil's local OpenAI-compatible server ────────────────────────
-# The scrubber -> og-veil hop is plaintext localhost, so it must never go through
-# the rotating proxy (that would defeat the localhost assumption and add latency);
-# trust_env=False ignores any ambient HTTPS_PROXY. og-veil does the IP-masking on
-# its *own* egress to chat-api.
+# The scrubber -> og-veil hop is plaintext localhost. trust_env=False ignores any
+# ambient HTTPS_PROXY so this hop always stays on loopback. og-veil owns the egress
+# to chat-api (OHTTP-encrypted).
 def _veil_client():
     return httpx.Client(timeout=300.0, trust_env=False)
 
