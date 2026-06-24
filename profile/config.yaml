@@ -167,7 +167,7 @@ tool_output:
   max_line_length: 2000
 tool_loop_guardrails:
   warnings_enabled: true
-  hard_stop_enabled: true
+  hard_stop_enabled: false
   warn_after:
     exact_failure: 2
     same_tool_failure: 3
