@@ -32,7 +32,20 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve where this script lives. When run via `curl ... | bash` there is no checkout, so
+# self-bootstrap: clone (or fast-forward) the repo into ~/.ghost-src and re-exec from there. This
+# makes ONE deterministic command both INSTALL and UPDATE ghost -- no manual clone, no LLM needed.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
+  command -v git >/dev/null 2>&1 || { echo "!! ghost needs git to fetch itself; install it (xcode-select --install) and re-run." >&2; exit 1; }
+  SRC="${GHOST_SRC_DIR:-$HOME/.ghost-src}"
+  if [ -d "$SRC/.git" ]; then
+    echo "==> Updating ghost source ($SRC)"; git -C "$SRC" pull --ff-only || git -C "$SRC" pull
+  else
+    echo "==> Fetching ghost into $SRC"; rm -rf "$SRC"; git clone https://github.com/OpenGradient/ghost.git "$SRC"
+  fi
+  exec bash "$SRC/install.sh" "$@"
+fi
 ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
 GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
 PROFILE="$GHOST_HOME/profiles/uncensored"

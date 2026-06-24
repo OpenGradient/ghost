@@ -13,13 +13,15 @@
 
 ---
 
-## Quick Install
+## Install & update
 
-**macOS only** (the privacy stack runs as launchd services). One command installs everything -- the engine into `~/.ghost-engine` (it leaves any existing `hermes` install untouched), the privacy stack, and the `ghost` + `ghost-login` commands. Idempotent:
+**macOS only** (the privacy stack runs as launchd services). One deterministic command -- nothing agentic, no LLM in the loop -- installs everything (the engine into `~/.ghost-engine`, leaving any existing `hermes` install untouched; the privacy stack; the `ghost` / `ghost-login` / `ghost-update` commands). The **same command updates** an existing install, and it's idempotent + safe to re-run (it keeps your login, sessions, and denylist):
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
 ```
+
+From a local clone it's just `./install.sh`; once installed, `ghost update` runs the same thing. Add options before the command, e.g. `GHOST_LOCAL=1 ...` (also install an offline local model), `GHOST_LOCAL_32B=1 ...` (the stronger 32B too, 26GB), or `GHOST_SCRUB=1 ...` (turn on outbound PII/secret redaction). By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks run hosted over the same private path.
 
 Then connect once and go:
 
@@ -30,17 +32,6 @@ ghost --yolo       # auto-accept tool approvals (skip-permissions)
 ghost --resume <session_id>     # resume a past session  (find one with: ghost sessions browse)
 ghost --local      # force the offline local model (needs GHOST_LOCAL)
 ```
-
-Optional at install time:
-
-```bash
-GHOST_LOCAL=1     ./install.sh   # also install a local model (offline/incognito fallback)
-GHOST_LOCAL_32B=1 ./install.sh   # pull the stronger 32B local model too (26GB)
-```
-
-By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks also run hosted over the same private path.
-
-**Update any time** with `ghost update` -- it pulls the latest source and re-runs the installer (idempotent, keeps your options). To also move to a newer upstream Hermes engine, run `hermes update` first, then `ghost update`.
 
 ---
 
