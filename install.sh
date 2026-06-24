@@ -133,7 +133,10 @@ s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
 s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
            r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-open(p, "w").write(s); print("   hosted-only: auxiliary + fallback routed to hosted nous/hermes-4-70b (via og-veil)")
+# Chat fallback -> the stronger 405B (aux tasks stay on 70B for speed/cost).
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b",
+           r"\g<1>nous/hermes-4-405b", s, count=1)
+open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> nous/hermes-4-70b (via og-veil)")
 PYEOF
 fi
 
