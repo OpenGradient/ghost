@@ -52,7 +52,7 @@ PROFILE="$GHOST_HOME/profiles/uncensored"
 PRIV="$GHOST_HOME/privacy"
 LA="$HOME/Library/LaunchAgents"
 ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
-PYTHON="${GHOST_PYTHON:-$(command -v python3 || true)}"
+PYTHON="${GHOST_PYTHON:-}"   # resolved to an isolated uv venv (Python 3.11) in the Dependencies step
 SCRUBBER="http://127.0.0.1:8788"
 # Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
 # auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
@@ -78,7 +78,14 @@ have(){ command -v "$1" >/dev/null 2>&1; }
 
 # ---------- 0. dependencies (auto-installed) ----------
 say "Dependencies"
-[ -n "$PYTHON" ] || { echo "!! need python3 (3.11+); install it and re-run."; exit 1; }
+# uv manages the Python toolchain + an isolated venv for ghost's privacy stack, so we never depend
+# on the system python (Apple ships 3.9) -- uv fetches CPython 3.11 itself if the machine lacks it.
+if ! have uv; then
+  echo "   installing uv (Astral's Python package/venv manager)"
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+have uv || { echo "!! ghost needs uv (https://docs.astral.sh/uv/getting-started/installation/); install it and re-run." >&2; exit 1; }
 
 if [ -n "$WANT_LOCAL" ]; then
   if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
@@ -94,23 +101,20 @@ fi
 SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(command -v hermes)")/.." 2>/dev/null && pwd)"
 [ -d "$SRC" ] || { echo "!! can't locate the Hermes engine to fork."; exit 1; }
 
-# Privacy-stack deps: og-veil (the opengradient-veil package) owns the whole
-# hosted-inference protocol -- on-chain TEE registry discovery, Oblivious-HTTP/HPKE
-# encryption, response verification, and the Supabase session -- so ghost no longer
-# hand-rolls any of it (cryptography/web3 come in transitively via the SDK). The
-# scrubbing bridge only needs httpx to forward to og-veil's local server.
-say "Privacy-stack Python deps (opengradient-veil + httpx)"
-# Pinned: og-veil is the load-bearing OHTTP/HPKE/TEE-verify boundary, so we don't silently
-# --upgrade into a behavior/verification change. Bump the pin in requirements.txt deliberately.
-"$PYTHON" -m pip install -q -r "$REPO/requirements.txt" \
-  || { echo "!! failed to install the privacy stack (opengradient-veil + httpx); check pip/network and re-run."; exit 1; }
-echo "   og-veil $("$PYTHON" -m pip show opengradient-veil 2>/dev/null | awk '/^Version:/{print $2}')"
-# Optional NER PII scrubber (Presidio + spaCy en_core_web_md). Best-effort: if it installs,
-# ghost enables it; if not, the proven regex scrubber stays in use. ~40MB model.
-if ! "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
-  echo "   installing Presidio (NER PII scrubber)"; "$PYTHON" -m pip install -q presidio-analyzer presidio-anonymizer 2>/dev/null || true
-fi
-"$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md 2>/dev/null || true
+# Privacy stack: og-veil (the opengradient-veil package) owns the whole hosted-inference protocol
+# -- on-chain TEE registry discovery, OHTTP/HPKE encryption, response verification, the Supabase
+# session. Declared in pyproject.toml + uv.lock, installed into an ISOLATED venv at ~/.ghost/venv
+# (Python 3.11, fetched by uv if the system lacks it). Reproducible; never touches system python.
+say "Privacy stack (isolated uv venv, Python 3.11)"
+export UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv"
+SYNC_EXTRAS=""
+# The NER scrubber (Presidio + spaCy) is only needed if you opt into redaction -- skip it otherwise.
+[ -n "${GHOST_SCRUB:-}" ] && SYNC_EXTRAS="--extra presidio"
+( cd "$REPO" && uv sync --python 3.11 --frozen $SYNC_EXTRAS ) \
+  || ( cd "$REPO" && uv sync --python 3.11 $SYNC_EXTRAS ) \
+  || { echo "!! failed to provision the privacy venv (uv sync); check network and re-run." >&2; exit 1; }
+PYTHON="$UV_PROJECT_ENVIRONMENT/bin/python"
+echo "   venv: Python $("$PYTHON" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))') · og-veil $("$PYTHON" -c 'import importlib.metadata as m;print(m.version("opengradient-veil"))' 2>/dev/null)"
 
 # ---------- 1. local models (OPT-IN via GHOST_LOCAL; 32B also needs GHOST_LOCAL_32B) ----------
 LOCAL_MODEL="ghost-tool:latest"
@@ -157,12 +161,18 @@ fi
 say "Privacy stack (PII/secret scrubber -> og-veil)"
 mkdir -p "$PRIV"
 cp "$REPO"/privacy/*.py "$PRIV/"
-# Enable the NER PII scrubber when Presidio + the spaCy model are present; else leave it off
-# (the bridge falls back to the regex scrubber). Toggle anytime: touch/rm $PRIV/.presidio.
-if "$PYTHON" -c "import presidio_analyzer, en_core_web_md" 2>/dev/null; then
-  : > "$PRIV/.presidio"; echo "   NER PII scrubber (Presidio + spaCy) enabled"
+# Stage the NER engine for redaction. Redaction is OFF by default, so this only matters once you
+# opt in (GHOST_SCRUB / ghost --scrub). When the presidio extra is installed, fetch the spaCy model
+# and mark NER available; otherwise redaction (if turned on later) uses the regex engine.
+if "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
+  "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md >/dev/null 2>&1 || true
+  if "$PYTHON" -c "import en_core_web_md" 2>/dev/null; then
+    : > "$PRIV/.presidio"; echo "   redaction engine ready: Presidio + spaCy NER (used only when redaction is on)"
+  else
+    rm -f "$PRIV/.presidio"; echo "   redaction engine: regex (spaCy model unavailable)"
+  fi
 else
-  rm -f "$PRIV/.presidio"; echo "   Presidio not available -- using the regex scrubber"
+  rm -f "$PRIV/.presidio"   # presidio not installed (default) -> regex engine if redaction is turned on
 fi
 [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
 cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"

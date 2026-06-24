@@ -15,7 +15,7 @@
 
 ## Install & update
 
-**macOS only** (the privacy stack runs as launchd services). One deterministic command -- nothing agentic, no LLM in the loop -- installs everything (the engine into `~/.ghost-engine`, leaving any existing `hermes` install untouched; the privacy stack; the `ghost` / `ghost-login` / `ghost-update` commands). The **same command updates** an existing install, and it's idempotent + safe to re-run (it keeps your login, sessions, and denylist):
+**macOS only** (the privacy stack runs as launchd services). One deterministic command -- nothing agentic, no LLM in the loop -- installs everything (the engine into `~/.ghost-engine`, leaving any existing `hermes` install untouched; the privacy stack; the `ghost` / `ghost-login` / `ghost-update` commands). The only prerequisite is `git`; the Python side is handled by [uv](https://docs.astral.sh/uv/) (auto-installed), which provisions an isolated Python 3.11 venv from `pyproject.toml` + `uv.lock` -- so it never touches your system Python. The **same command updates** an existing install, and it's idempotent + safe to re-run (it keeps your login, sessions, and denylist):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
