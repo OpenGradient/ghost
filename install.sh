@@ -163,7 +163,9 @@ if [ -n "$USE_PROXY" ]; then
     [ -n "${WS_URL:-}" ] && curl -fsSL "$WS_URL" -o "$GHOST_HOME/webshare_proxies.txt" && echo "   $(wc -l <"$GHOST_HOME/webshare_proxies.txt"|tr -d ' ') proxies"
   fi
   BASE_SERVICES="hermes-proxy $BASE_SERVICES"
+  : > "$PRIV/.proxy"   # marker: egress is IP-masked through the rotating proxy (banner reads this)
 else
+  rm -f "$PRIV/.proxy"
   say "Direct mode (default) -- og-veil talks to chat-api directly; no rotating proxy. Set GHOST_PROXY=1 to IP-mask."
 fi
 
