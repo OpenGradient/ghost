@@ -231,8 +231,8 @@ say "Smoke test"
 
 say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Hosted default = nous/hermes-4-405b via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
-echo "   Inside ghost, /model switches between hosted models and the local 32B (true incognito)."
+echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
+echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
 echo "   Personalize $PRIV/pii_denylist.txt with your name/email/handles for the hosted-path scrubber."
 [ -n "$USE_PROXY" ] || echo "   Direct mode (default). For IP-masking from the relay, reinstall with GHOST_PROXY=1."
 echo "   Not connected yet? Run:  ghost-login"
