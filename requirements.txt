@@ -2,4 +2,7 @@
 # (opengradient-veil) cannot change under us on a re-install. Bump deliberately.
 # 0.2.7 pulls opengradient SDK 1.1.1, whose model enum includes deepseek-v4-pro.
 opengradient-veil>=0.2.7,<0.3
+# Pin the SDK explicitly too -- pip won't upgrade the transitive dep on its own, and the SDK's
+# TEE_LLM enum is what `og-veil models` reports (1.1.1 adds deepseek-v4-pro).
+opengradient>=1.1.1
 httpx>=0.27
