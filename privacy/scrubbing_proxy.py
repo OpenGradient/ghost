@@ -62,8 +62,9 @@ except Exception:
 # Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so it
 # only offers OPEN-WEIGHT, steerable models. Closed, safety-tuned refusers (Claude, GPT, Gemini,
 # Grok, Seed) are served by the gateway but deliberately excluded -- they refuse/moralize and
-# can't be steered. This list is the single source of truth for both the picker and the bridge's
-# allow-list (_ALLOWED_GATEWAY_MODELS).
+# can't be steered. GLM-5.2 is open-weight but excluded for the same reason: the gateway injects a
+# safety system prompt for it that the steer can't override (verified 2026-06-24). This list is the
+# single source of truth for both the picker and the bridge's allow-list (_ALLOWED_GATEWAY_MODELS).
 #
 # SUPPORTED-MODEL REFERENCE (gateway-verified by probing /v1/chat/completions, 2026-06-24):
 # the gateway's open-weight models are hermes-4-405b, hermes-4-70b, deepseek-v4-pro, glm-5.2.
@@ -73,7 +74,6 @@ except Exception:
 _CATALOG_MODELS = [
     ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work (default)"),
     ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable"),
-    ("zai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
 

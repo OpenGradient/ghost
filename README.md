@@ -6,7 +6,7 @@ ghost is built on the [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 <table>
 <tr><td><b>Private by construction</b></td><td>Every hosted request is HPKE/OHTTP-encrypted by <a href="https://github.com/OpenGradient/veil">og-veil</a> and run inside a TEE enclave. The relay sees ciphertext, the enclave never sees who you are, and a local scrubber strips your name/secrets before anything is encrypted.</td></tr>
-<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B, GLM 5.2 -- open-weight models only. The default is steered to drop the usual refusals; closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list.</td></tr>
+<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B -- open-weight models only. The default is steered to drop the usual refusals; closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list.</td></tr>
 <tr><td><b>Verified responses</b></td><td>og-veil checks the enclave's signature on every response and refuses to emit a token it can't verify.</td></tr>
 <tr><td><b>Offline mode</b></td><td>Opt in with <code>GHOST_LOCAL=1</code> and switch with <code>ghost --local</code> -- a local abliterated model, zero egress, nothing leaves your machine.</td></tr>
 <tr><td><b>Relentless agent</b></td><td>Reads real errors, installs what it's missing, changes tactics, and keeps going until the task is done -- it doesn't stop to ask after one failure.</td></tr>
@@ -52,7 +52,6 @@ Open-weight models only -- ghost won't wire up a closed, refusing model. They al
 |---|---|
 | `deepseek/deepseek-v4-pro` **(default)** | Strongest open reasoning + coding model; best for agentic work. Uncensored via ghost's per-model steer. |
 | `nous/hermes-4-405b` | Flagship uncensored open model, most steerable. Also the hosted fallback. |
-| `zai/glm-5.2` | Strong open agentic MoE (Z.ai). |
 | `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
 | local (opt-in) | Abliterated 7B (`ghost-tool`), or 32B (`uncensored-local`) with `GHOST_LOCAL_32B`. Fully offline. |
 
