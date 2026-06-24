@@ -73,7 +73,7 @@ except Exception:
 _CATALOG_MODELS = [
     ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable (default)"),
     ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work"),
-    ("z-ai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
+    ("zai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
 
