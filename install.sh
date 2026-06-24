@@ -48,6 +48,18 @@ SCRUBBER="http://127.0.0.1:8788"
 # since hosted-only is now the default.)
 WANT_LOCAL="${GHOST_LOCAL:-}"; [ -n "${GHOST_LOCAL_32B:-}" ] && WANT_LOCAL=1
 
+# Record the source path + the chosen install options so `ghost update` can re-pull and
+# re-install the exact same way (see bin/ghost-update).
+mkdir -p "$GHOST_HOME"
+echo "$REPO" > "$GHOST_HOME/.src"
+{
+  [ -n "${GHOST_LOCAL:-}" ] && echo "GHOST_LOCAL=1"
+  [ -n "${GHOST_LOCAL_32B:-}" ] && echo "GHOST_LOCAL_32B=1"
+  [ -n "${GHOST_SCRUB:-}" ] && echo "GHOST_SCRUB=1"
+  [ -n "${GHOST_CHAT_APP_URL:-}" ] && echo "GHOST_CHAT_APP_URL=$GHOST_CHAT_APP_URL"
+  :
+} > "$GHOST_HOME/.install-env"
+
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
@@ -187,12 +199,13 @@ for _ in $(seq 1 20); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 
 say "Forking + debranding the engine -> $ENG"
 GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$SRC" bash "$REPO/scripts/fork-engine.sh"
 
-# ---------- 5. the ghost + ghost-login commands ----------
-say "Installing the ghost + ghost-login commands"
+# ---------- 5. the ghost + ghost-login + ghost-update commands ----------
+say "Installing the ghost + ghost-login + ghost-update commands"
 mkdir -p "$HOME/.local/bin"
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
-chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login"
+sed -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-update" > "$HOME/.local/bin/ghost-update"
+chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login" "$HOME/.local/bin/ghost-update"
 
 # ---------- 6. connect your account (hosted models) ----------
 say "Connect your OpenGradient Chat account (for hosted models)"

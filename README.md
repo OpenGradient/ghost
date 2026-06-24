@@ -40,6 +40,8 @@ GHOST_LOCAL_32B=1 ./install.sh   # pull the stronger 32B local model too (26GB)
 
 By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks also run hosted over the same private path.
 
+**Update any time** with `ghost update` -- it pulls the latest source and re-runs the installer (idempotent, keeps your options). To also move to a newer upstream Hermes engine, run `hermes update` first, then `ghost update`.
+
 ---
 
 ## Models
@@ -74,7 +76,7 @@ Two boundaries: the **relay** sees your account + IP but only ciphertext; the **
 ## Honest limits
 
 - **The local model is opt-in and weaker.** Off by default (install with `GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration under tool-use enforcement.
-- **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`. `hermes update` only updates the original install; re-run `scripts/fork-engine.sh` to pull upstream changes into the fork.
+- **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`, and `ghost update` (not `hermes update`) is what refreshes the fork.
 
 ---
 

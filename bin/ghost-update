@@ -1,0 +1,29 @@
+#!/bin/sh
+# ghost-update -- pull the latest ghost source and re-run the installer (idempotent),
+# reusing the options you first installed with (GHOST_LOCAL / GHOST_SCRUB / ...). This
+# updates ghost's wrapper (privacy stack, commands, profile) and re-forks + re-debrands
+# the engine. Invoked by `ghost update`.
+#
+# Note: this does NOT pull a newer UPSTREAM Hermes engine on its own -- for that, run
+# `hermes update` first (updates the base install), then `ghost update` re-forks it.
+set -e
+GHOST_HOME="__GHOST_HOME__"
+
+# Prefer the source repo you installed from; fall back to a managed clone in ~/.ghost-src.
+SRC="$(cat "$GHOST_HOME/.src" 2>/dev/null || true)"
+[ -d "$SRC/.git" ] || SRC="$HOME/.ghost-src"
+
+if [ -d "$SRC/.git" ]; then
+  echo "👻 ghost-update · pulling latest source ($SRC)"
+  git -C "$SRC" pull --ff-only || git -C "$SRC" pull
+else
+  echo "👻 ghost-update · fetching ghost into $SRC"
+  rm -rf "$SRC"
+  git clone https://github.com/OpenGradient/ghost.git "$SRC"
+fi
+
+# Re-apply the same install options you chose originally.
+if [ -f "$GHOST_HOME/.install-env" ]; then set -a; . "$GHOST_HOME/.install-env"; set +a; fi
+
+echo "👻 ghost-update · re-running the installer (idempotent)"
+exec bash "$SRC/install.sh"

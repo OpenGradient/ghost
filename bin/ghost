@@ -17,6 +17,10 @@ export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine h
 # infers through the OG TEE gateway and never needs this key.
 unset ANTHROPIC_API_KEY
 
+# `ghost update` -- pull the latest ghost + re-run the installer (idempotent). Intercepted here
+# so it doesn't fall through to the engine's own `update` (which only touches the base install).
+if [ "${1:-}" = "update" ]; then shift; exec "$HOME/.local/bin/ghost-update" "$@"; fi
+
 # --paths (or --code): path-aware mode -- let real filesystem paths reach the hosted model
 # for agentic file work; name + secrets in content are still scrubbed. Default off = full redaction.
 PASS_PATHS=""
