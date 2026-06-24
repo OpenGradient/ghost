@@ -6,7 +6,7 @@ ghost is built on the [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 <table>
 <tr><td><b>Private by construction</b></td><td>Every hosted request is HPKE/OHTTP-encrypted by <a href="https://github.com/OpenGradient/veil">og-veil</a> and run inside a TEE enclave. The relay sees ciphertext, the enclave never sees who you are, and a local scrubber strips your name/secrets before anything is encrypted.</td></tr>
-<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B, GLM 5.2 -- all open-weight, made uncensored via a per-model steer. Closed/refusing models (Claude, GPT, Gemini, Grok) are not offered and are rejected at the gateway.</td></tr>
+<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B, GLM 5.2 -- open-weight models only. The default is steered to drop the usual refusals; closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list.</td></tr>
 <tr><td><b>Verified responses</b></td><td>og-veil checks the enclave's signature on every response and refuses to emit a token it can't verify.</td></tr>
 <tr><td><b>Offline mode</b></td><td>Opt in with <code>GHOST_LOCAL=1</code> and switch with <code>ghost --local</code> -- a local abliterated model, zero egress, nothing leaves your machine.</td></tr>
 <tr><td><b>Relentless agent</b></td><td>Reads real errors, installs what it's missing, changes tactics, and keeps going until the task is done -- it doesn't stop to ask after one failure.</td></tr>
@@ -17,7 +17,7 @@ ghost is built on the [Hermes Agent](https://github.com/NousResearch/hermes-agen
 
 ## Quick Install
 
-One command installs everything -- the engine into `~/.ghost-engine` (it leaves any existing `hermes` install untouched), the privacy stack, and the `ghost` + `ghost-login` commands. Idempotent:
+**macOS only** (the privacy stack runs as launchd services). One command installs everything -- the engine into `~/.ghost-engine` (it leaves any existing `hermes` install untouched), the privacy stack, and the `ghost` + `ghost-login` commands. Idempotent:
 
 ```bash
 ./install.sh
@@ -46,7 +46,7 @@ By default ghost is hosted-only: no Ollama, and both the fallback (`hermes-4-405
 
 ## Models
 
-Every model is unrestricted and open-weight, served over one OHTTP/TEE path. Switch with `/model`; the gateway rejects anything off this list.
+Open-weight models only -- ghost won't wire up a closed, refusing model. They all run over the one OHTTP/TEE path; switch with `/model`, and the gateway rejects anything off this list.
 
 | Model | What it is |
 |---|---|
