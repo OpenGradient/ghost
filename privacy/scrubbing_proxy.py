@@ -71,8 +71,8 @@ except Exception:
 # gateway serves them. Do NOT trust that list to add a model; probe the endpoint. The gateway
 # rejects anything it doesn't serve with `Model '<id>' is not supported`.
 _CATALOG_MODELS = [
-    ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable (default)"),
-    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work"),
+    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work (default)"),
+    ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable"),
     ("zai/glm-5.2", "GLM 5.2 — strong open agentic MoE (Z.ai)"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]

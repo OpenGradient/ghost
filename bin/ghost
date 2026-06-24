@@ -78,9 +78,9 @@ if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
   # IP-masked through it -- we probe its exit IP purely for the status line.
   EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
   if [ -n "$EXIT_IP" ]; then
-    STATUS="👻 ghost · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · $FB"
+    STATUS="👻 ghost · default = DeepSeek V4 Pro via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · $FB"
   else
-    STATUS="👻 ghost · direct · default = Hermes 405B via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
+    STATUS="👻 ghost · direct · default = DeepSeek V4 Pro via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
   fi
 elif [ "$HC" = "200" ]; then
   STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), $FB_DOWN"

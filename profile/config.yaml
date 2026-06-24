@@ -1,6 +1,6 @@
 model:
   base_url: http://127.0.0.1:8788/v1
-  default: nous/hermes-4-405b
+  default: deepseek/deepseek-v4-pro
   provider: opengradient
   context_length: 65536
   ollama_num_ctx: 65536
@@ -17,7 +17,7 @@ providers:
   opengradient:
     base_url: http://127.0.0.1:8788/v1
     api_key: managed-by-og-veil
-    default_model: nous/hermes-4-405b
+    default_model: deepseek/deepseek-v4-pro
     context_length: 65536
   ollama-local:
     base_url: http://localhost:11434/v1

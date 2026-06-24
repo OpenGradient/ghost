@@ -33,7 +33,7 @@ Then connect your account once and run **`ghost`**:
 
 ```bash
 ghost-login        # browser login -> hands a session token back to this machine
-ghost              # chat (default = Hermes 405B via the OpenGradient TEE gateway, OHTTP-private)
+ghost              # chat (default = DeepSeek V4 Pro via the OpenGradient TEE gateway, OHTTP-private)
 ghost --local      # force the fully-offline local model (no scrubber, no og-veil, nothing leaves)
 ```
 
@@ -99,7 +99,7 @@ The default is the hosted Hermes 405B because it is the stronger agent; the OHTT
 
 | Layer | Behaviour |
 |---|---|
-| **Default model** | `nous/hermes-4-405b` via the `opengradient` provider -- scrubber (`:8788`) → og-veil (`:11435`) → chat-api relay → TEE gateway |
+| **Default model** | `deepseek/deepseek-v4-pro` via the `opengradient` provider -- scrubber (`:8788`) → og-veil (`:11435`) → chat-api relay → TEE gateway (uncensored through ghost's steer; strongest open agentic model). `nous/hermes-4-405b` and the rest of the catalog via `/model`. |
 | **Hosted line-up** | Hermes 4 (405B / 70B) -- unrestricted, open-weight models only, over the one OHTTP path. Closed/refusing models (Claude, GPT, Gemini, Grok) are deliberately not offered. |
 | **Fallback model** | `fallback_model` → local `uncensored-local` (32B) if the hosted gateway is unreachable |
 | **Tool / auxiliary model** | Local 7B abliterated (`ghost-tool`) runs titling, compression, triage -- never a hosted provider |
@@ -228,7 +228,7 @@ ghost-login --status        # who am I logged in as?
 ```
 
 ```bash
-ghost                       # chat (default = Hermes 405B via the TEE gateway, OHTTP-private)
+ghost                       # chat (default = DeepSeek V4 Pro via the TEE gateway, OHTTP-private)
 ghost --yolo -z "..."       # one-shot
 ghost --paths "..."         # agentic file work: real filesystem paths reach the hosted model
                             #   (your name + secrets in content are still scrubbed)
