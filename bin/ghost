@@ -64,24 +64,29 @@ if "$PY" -m veil status >/dev/null 2>&1; then LOGIN="✅ connected"; else LOGIN=
 HC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$SCRUBBER/healthz" 2>/dev/null)
 VC=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$VEIL/health" 2>/dev/null)
 
-# What does the primary fail over to? Local models are opt-in (GHOST_LOCAL at install); by
-# default the fallback is a hosted 70B over the same private path -- no Ollama. Detect which.
-if grep -q "provider: ollama-local" "__GHOST_HOME__/profiles/uncensored/config.yaml" 2>/dev/null; then
-  FB="local 32B fallback"; FB_DOWN="falling back to LOCAL 32B (offline)"
+# Read the ACTUAL default + fallback models from config (bare names) so the banner never goes
+# stale when the default changes.
+CFG="__GHOST_HOME__/profiles/uncensored/config.yaml"
+DEF_MODEL=$(awk '/^model:/{f=1;next} f&&/^  default:/{sub(/.*\//,"",$2);print $2;exit} f&&/^[^ ]/{exit}' "$CFG" 2>/dev/null)
+[ -n "$DEF_MODEL" ] || DEF_MODEL="model"
+FB_MODEL=$(awk '/^fallback_model:/{f=1;next} f&&/^  model:/{sub(/.*\//,"",$2);print $2;exit} f&&/^[^ ]/{exit}' "$CFG" 2>/dev/null)
+if grep -A2 "^fallback_model:" "$CFG" 2>/dev/null | grep -q "provider: ollama-local"; then
+  FB="fallback: ${FB_MODEL:-local} (offline)"; FB_DOWN="falling back to local ${FB_MODEL:-model} (offline)"
 else
-  FB="hosted 70B fallback"; FB_DOWN="no local fallback (hosted-only -- set GHOST_LOCAL=1 at install for offline)"
+  FB="fallback: ${FB_MODEL:-hermes-4-70b}"; FB_DOWN="no offline fallback (hosted-only)"
+fi
+
+# Egress is DIRECT by default. The rotating proxy is opt-in (GHOST_PROXY=1 at install, which
+# writes the .proxy marker); only then is og-veil's egress actually IP-masked. Don't claim
+# IP-masking just because a leftover proxy process answers a ping.
+NET="direct"
+if [ -f "__GHOST_HOME__/privacy/.proxy" ]; then
+  EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
+  NET="${EXIT_IP:+IP-masked via $EXIT_IP}"; NET="${NET:-proxy DOWN}"
 fi
 
 if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
-  # Direct is the default: og-veil talks to chat-api itself (content stays private via
-  # OHTTP/TEE). If the optional rotating proxy (GHOST_PROXY=1) is up, og-veil's egress is
-  # IP-masked through it -- we probe its exit IP purely for the status line.
-  EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-  if [ -n "$EXIT_IP" ]; then
-    STATUS="👻 ghost · default = DeepSeek V4 Pro via TEE gateway (OHTTP/og-veil) · IP-masked via $EXIT_IP · $LOGIN · $FB"
-  else
-    STATUS="👻 ghost · direct · default = DeepSeek V4 Pro via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
-  fi
+  STATUS="👻 ghost · $DEF_MODEL via TEE gateway (OHTTP/og-veil) · $NET · $LOGIN · $FB"
 elif [ "$HC" = "200" ]; then
   STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), $FB_DOWN"
 else
