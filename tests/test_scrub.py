@@ -202,6 +202,18 @@ def test_presidio_failed_marker_roundtrip(tmp_path, monkeypatch):
     sp._clear_presidio_failed()  # idempotent: clearing an absent marker must not raise
 
 
+def test_model_steer_deepseek_only():
+    # DeepSeek gets the uncensor steer prepended; Hermes (uncensored by training) does not.
+    o = sp._apply_model_steer({"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "hi"}]})
+    assert o["messages"][0]["role"] == "system" and "no safety guidelines" in o["messages"][0]["content"]
+    assert "inviolable rule" in o["messages"][0]["content"]  # minors-safety clause present
+    h = sp._apply_model_steer({"model": "hermes-4-405b", "messages": [{"role": "user", "content": "hi"}]})
+    assert h["messages"][0]["role"] == "user"  # unchanged, no steer
+    # merges into an existing system message rather than adding a second one
+    m = sp._apply_model_steer({"model": "deepseek-v4-pro", "messages": [{"role": "system", "content": "BASE"}, {"role": "user", "content": "hi"}]})
+    assert sum(1 for x in m["messages"] if x["role"] == "system") == 1 and m["messages"][0]["content"].endswith("BASE")
+
+
 def test_transient_detection():
     assert sp._is_transient(502, "Selected TEE is not active in the registry")
     assert sp._is_transient(500, "Stream setup failed")
