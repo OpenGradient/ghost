@@ -1,8 +1,6 @@
 # ghost 👻
 
-**A private, unrestricted agentic harness.** ghost is a real terminal agent -- it runs commands, reads and writes files, executes code, and searches the web -- with every hosted request routed through OpenGradient's private TEE gateway, so your prompts and your work stay private. It treats you as a competent adult: it answers what you actually ask, in full, no moralizing and no refusals, and no topic is off-limits when you raise it. It just doesn't volunteer illegal or shock content on its own. It can also drop to a fully-offline local model where nothing leaves the box.
-
-ghost is built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wrapped to route inference through OpenGradient's gateway and to offer only genuinely unrestricted, open-weight models.
+**A private, unrestricted agentic harness.** ghost is a real terminal agent -- it runs commands, edits files, executes code, and searches the web -- routing every hosted request through OpenGradient's private TEE gateway. It answers what you actually ask, in full, with no refusals or moralizing, and can drop to a fully-offline local model where nothing leaves the box. Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
 
 <table>
 <tr><td><b>Private by construction</b></td><td>Every hosted request is HPKE/OHTTP-encrypted by <a href="https://github.com/OpenGradient/veil">og-veil</a> and run inside a TEE enclave: the relay sees only ciphertext and the enclave never sees who you are. Optional <code>ghost --scrub</code> also strips your name/secrets locally before encryption (off by default, so the agent keeps full fidelity for real work).</td></tr>
@@ -40,13 +38,13 @@ GHOST_LOCAL=1     ./install.sh   # also install a local model (offline/incognito
 GHOST_LOCAL_32B=1 ./install.sh   # pull the stronger 32B local model too (26GB)
 ```
 
-By default ghost is hosted-only: no Ollama, and both the fallback (`hermes-4-405b`) and the auxiliary tasks (`hermes-4-70b`) run hosted over the same private path.
+By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks also run hosted over the same private path.
 
 ---
 
 ## Models
 
-Open-weight models only -- ghost won't wire up a closed, refusing model. They all run over the one OHTTP/TEE path; switch with `/model`, and the gateway rejects anything off this list.
+Switch with `/model` -- all open-weight, nothing closed or refusing:
 
 | Model | What it is |
 |---|---|
@@ -69,16 +67,13 @@ ghost engine
                  └─ TEE enclave   decrypts, runs the model, signs the output
 ```
 
-Two boundaries: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. Redaction is **off by default** so ghost stays full-fidelity (it can read and use secrets during real work, e.g. authorized pentesting); turn on `ghost --scrub` and a local pass strips your name/email/secrets before encryption. Either way the hosted path is **private, not anonymous** -- your OpenGradient account is still authenticated and the relay sees your IP. For full anonymity, use the local model: zero egress, nothing leaves the box.
-
-(With `--scrub` on, filesystem paths stay readable by default so file work isn't blinded; `ghost --paths` and `--full-redaction` tune that. With scrubbing off -- the default -- the agent just sees real paths and content.)
+Two boundaries: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. Redaction is **off by default** so ghost stays full-fidelity (it can read and use secrets during real work, e.g. authorized pentesting); `ghost --scrub` turns on a local pass that strips your name/secrets before encryption. Either way the hosted path is **private, not anonymous**: your OpenGradient account is still authenticated and the relay sees your IP. For true anonymity, use the local model -- zero egress.
 
 ---
 
 ## Honest limits
 
-- **Private, not anonymous.** The relay still authenticates your OpenGradient account; OHTTP hides content and the scrubber hides PII, but the account link remains. Use the local model for zero-egress anonymity.
-- **The local path is opt-in and weaker.** Off by default; install with `GHOST_LOCAL`. The local model is a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration under tool-use enforcement.
+- **The local model is opt-in and weaker.** Off by default (install with `GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration under tool-use enforcement.
 - **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`. `hermes update` only updates the original install; re-run `scripts/fork-engine.sh` to pull upstream changes into the fork.
 
 ---
