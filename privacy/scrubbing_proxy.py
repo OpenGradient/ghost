@@ -309,10 +309,9 @@ def _apply_model_steer(obj):
 
 
 # ── Upstream: og-veil's local OpenAI-compatible server ────────────────────────
-# The scrubber -> og-veil hop is plaintext localhost, so it must never go through
-# the rotating proxy (that would defeat the localhost assumption and add latency);
-# trust_env=False ignores any ambient HTTPS_PROXY. og-veil does the IP-masking on
-# its *own* egress to chat-api.
+# The scrubber -> og-veil hop is plaintext localhost. trust_env=False ignores any
+# ambient HTTPS_PROXY so this hop always stays on loopback. og-veil owns the egress
+# to chat-api (OHTTP-encrypted).
 def _veil_client():
     return httpx.Client(timeout=300.0, trust_env=False)
 

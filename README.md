@@ -38,7 +38,6 @@ Optional at install time:
 ```bash
 GHOST_LOCAL=1     ./install.sh   # also install a local model (offline/incognito fallback)
 GHOST_LOCAL_32B=1 ./install.sh   # pull the stronger 32B local model too (26GB)
-GHOST_PROXY=1     ./install.sh   # opt in to a rotating proxy to also hide your IP from the relay (off by default)
 ```
 
 By default ghost is hosted-only: no Ollama, and both the fallback (`hermes-4-405b`) and the auxiliary tasks (`hermes-4-70b`) run hosted over the same private path.
@@ -71,7 +70,7 @@ ghost engine
                  └─ TEE enclave   decrypts, runs the model, signs the output
 ```
 
-Two boundaries, like the website: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. The scrubber runs first, on plaintext localhost, so your name/email/secrets reach neither. The hosted path is **private, not anonymous** -- your OpenGradient account is still authenticated, and by default the relay sees your real IP (`GHOST_PROXY=1` masks it). For full anonymity, use the local model: zero egress, nothing leaves the box.
+Two boundaries, like the website: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. The scrubber runs first, on plaintext localhost, so your name/email/secrets reach neither. The hosted path is **private, not anonymous** -- your OpenGradient account is still authenticated and the relay sees your IP. For full anonymity, use the local model: zero egress, nothing leaves the box.
 
 For agentic file work, real paths are scrubbed by default (the model sees `/Users/[REDACTED]/...`); run `ghost --paths` to let real paths through while your name + secrets in prose stay scrubbed, or use the local model where paths are always real.
 

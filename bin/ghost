@@ -8,7 +8,6 @@
 # offline local model still runs.
 SCRUBBER="http://127.0.0.1:8788"
 VEIL="http://127.0.0.1:11435"
-PROXY="http://127.0.0.1:8899"
 PY=__PYTHON__
 SENTINEL="__GHOST_HOME__/privacy/.pass_paths"
 export HERMES_HOME="__GHOST_HOME__"   # ghost's isolated state dir (the engine honors HERMES_HOME)
@@ -77,17 +76,11 @@ else
 fi
 
 # Privacy comes from og-veil: every request is HPKE/OHTTP-encrypted, so the relay only ever sees
-# ciphertext (the "via TEE gateway (OHTTP)" below). The relay still sees your IP; the OPTIONAL
-# rotating proxy (GHOST_PROXY=1, off by default) hides that too. Only surface an IP indicator
-# when the proxy is actually enabled (.proxy marker) -- no VPN noise in the default direct setup.
-NET=""
-if [ -f "__GHOST_HOME__/privacy/.proxy" ]; then
-  EXIT_IP=$(/usr/bin/curl -s --max-time 6 -x "$PROXY" https://api.ipify.org 2>/dev/null)
-  NET=" · ${EXIT_IP:+IP-masked via $EXIT_IP}"; [ -n "$EXIT_IP" ] || NET=" · proxy DOWN"
-fi
+# ciphertext (the "via TEE gateway (OHTTP)" below). The relay still sees your IP; for full
+# anonymity use the local model (ghost --local), which has zero egress.
 
 if [ "$HC" = "200" ] && [ "$VC" = "200" ]; then
-  STATUS="👻 ghost · $DEF_MODEL via TEE gateway (OHTTP/og-veil)${NET} · $LOGIN · $FB"
+  STATUS="👻 ghost · $DEF_MODEL via TEE gateway (OHTTP/og-veil) · $LOGIN · $FB"
 elif [ "$HC" = "200" ]; then
   STATUS="👻 ghost · ⚠️ og-veil DOWN (veil=$VC) -- hosted unreachable (try ghost-login), $FB_DOWN"
 else
