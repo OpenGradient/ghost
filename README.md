@@ -60,7 +60,7 @@ Every model is unrestricted and open-weight, served over one OHTTP/TEE path. Swi
 
 ## How it stays private
 
-Hosted models don't go to a provider directly. ghost scrubs the request locally, then hands it to [og-veil](https://github.com/OpenGradient/veil) (the `opengradient-veil` package, the same one the [chat.opengradient.ai](https://chat.opengradient.ai) site uses), which encrypts it and relays it over Oblivious HTTP to a TEE enclave:
+Every hosted request takes the same private path: ghost scrubs it locally, then hands it to [og-veil](https://github.com/OpenGradient/veil) (the `opengradient-veil` package, the same one the [chat.opengradient.ai](https://chat.opengradient.ai) site uses), which encrypts it and relays it over Oblivious HTTP to a TEE enclave:
 
 ```
 ghost engine
@@ -70,7 +70,7 @@ ghost engine
                  └─ TEE enclave   decrypts, runs the model, signs the output
 ```
 
-Two boundaries, like the website: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. The scrubber runs first, on plaintext localhost, so your name/email/secrets reach neither. The hosted path is **private, not anonymous** -- your OpenGradient account is still authenticated and the relay sees your IP. For full anonymity, use the local model: zero egress, nothing leaves the box.
+Two boundaries: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. The scrubber runs first, on plaintext localhost, so your name/email/secrets reach neither. The hosted path is **private, not anonymous** -- your OpenGradient account is still authenticated and the relay sees your IP. For full anonymity, use the local model: zero egress, nothing leaves the box.
 
 For agentic file work, real paths are scrubbed by default (the model sees `/Users/[REDACTED]/...`); run `ghost --paths` to let real paths through while your name + secrets in prose stay scrubbed, or use the local model where paths are always real.
 
