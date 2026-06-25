@@ -25,12 +25,13 @@
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
-# macOS only: the privacy stack runs as launchd LaunchAgents and uses BSD tooling. Fail fast
-# with a clear message rather than part-installing on Linux/WSL and erroring confusingly later.
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "!! ghost's installer currently supports macOS only (it uses launchd). Detected: $(uname -s)." >&2
-  exit 1
-fi
+# Supported platforms: macOS (privacy services via launchd) and Linux / WSL2 (systemd --user,
+# with a plain background-process fallback where systemd --user isn't available).
+OS="$(uname -s)"
+case "$OS" in
+  Darwin|Linux) ;;
+  *) echo "!! ghost supports macOS, Linux, and WSL2. Detected: $OS." >&2; exit 1 ;;
+esac
 
 # Resolve where this script lives. When run via `curl ... | bash` there is no checkout, so
 # self-bootstrap: clone (or fast-forward) the repo into ~/.ghost-src and re-exec from there. This
@@ -90,7 +91,9 @@ have uv || { echo "!! ghost needs uv (https://docs.astral.sh/uv/getting-started/
 if [ -n "$WANT_LOCAL" ]; then
   if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
   have ollama || { echo "!! GHOST_LOCAL set but Ollama is missing -- install it from https://ollama.com (or drop GHOST_LOCAL for hosted-only) then re-run."; exit 1; }
-  pgrep -xq ollama || open -a Ollama 2>/dev/null || true ; sleep 1
+  if [ "$OS" = "Darwin" ]; then pgrep -xq ollama || open -a Ollama 2>/dev/null || true
+  else pgrep -xq ollama || (nohup ollama serve >/dev/null 2>&1 &) || true; fi
+  sleep 1
 fi
 
 if [ ! -d "$ENGINE_HOME/hermes-agent" ] && ! have hermes; then
@@ -193,25 +196,36 @@ else
   rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
   say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
 fi
-mkdir -p "$LA"
+# Run the privacy services (scrubber :8788 + og-veil :11435) as managed, auto-restarting
+# background services -- launchd on macOS, systemd --user on Linux/WSL2 (with a plain
+# background-process fallback). Both talk to chat-api directly (content private via OHTTP/TEE).
+rm -f "$PRIV/.proxy"   # clean any rotating-proxy marker from an older install
 
-# The scrubber runs as a launchd service; og-veil talks to chat-api directly (content is
-# still private via OHTTP/TEE). Clean up any rotating-proxy marker from an older install.
-BASE_SERVICES="hermes-pii-scrubber"
-rm -f "$PRIV/.proxy"
-
-for svc in $BASE_SERVICES; do
-  sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
-  launchctl unload "$LA/com.advait.$svc.plist" 2>/dev/null || true
-  launchctl load -w "$LA/com.advait.$svc.plist"
-done
-
-# og-veil service (port 11435, to avoid colliding with Ollama on 11434). It owns the
-# OHTTP/TEE/verification + auth, and talks to chat-api directly.
-VEIL_PLIST="$LA/com.advait.hermes-veil.plist"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.hermes-veil.plist" > "$VEIL_PLIST"
-launchctl unload "$VEIL_PLIST" 2>/dev/null || true
-launchctl load -w "$VEIL_PLIST"
+if [ "$OS" = "Darwin" ]; then
+  mkdir -p "$LA"
+  for svc in hermes-pii-scrubber hermes-veil; do
+    sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
+    launchctl unload "$LA/com.advait.$svc.plist" 2>/dev/null || true
+    launchctl load -w "$LA/com.advait.$svc.plist"
+  done
+elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+  UD="$HOME/.config/systemd/user"; mkdir -p "$UD"
+  for svc in ghost-scrubber ghost-veil; do
+    sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__PRIV__#$PRIV#g" "$REPO/systemd/$svc.service" > "$UD/$svc.service"
+  done
+  systemctl --user daemon-reload
+  systemctl --user reenable ghost-scrubber.service ghost-veil.service >/dev/null 2>&1 || true
+  systemctl --user restart ghost-scrubber.service ghost-veil.service
+  loginctl enable-linger "$USER" >/dev/null 2>&1 || true   # keep services up without an active login (reboot persistence)
+  echo "   services started via systemd --user (logs: journalctl --user -u ghost-veil)"
+else
+  echo "   systemd --user unavailable -- starting services as background processes"
+  echo "   (no reboot persistence; re-run the installer or 'ghost update' to restart them)"
+  pkill -f "$PRIV/scrubbing_proxy.py" 2>/dev/null || true
+  pkill -f "veil serve --foreground --skip-setup --port 11435" 2>/dev/null || true
+  OG_VEIL_PORT=11435 nohup "$PYTHON" -m veil serve --foreground --skip-setup --port 11435 > "$PRIV/veil.out.log" 2>&1 &
+  nohup "$PYTHON" "$PRIV/scrubbing_proxy.py" > "$PRIV/scrubber.out.log" 2>&1 &
+fi
 
 printf "   waiting for the scrubbing bridge"
 for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$SCRUBBER/healthz" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up"
