@@ -1,56 +1,72 @@
 # ghost 👻
 
-**A private, unrestricted agentic harness.** ghost is a real terminal agent -- it runs commands, edits files, executes code, and searches the web -- routing every hosted request through OpenGradient's private TEE gateway. It answers what you actually ask, in full, with no refusals or moralizing, and can drop to a fully-offline local model where nothing leaves the box. Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
+**A private, unrestricted agentic harness.** A real terminal agent that runs commands, edits files, executes code, and searches the web, with every hosted request routed through OpenGradient's TEE gateway so the model provider never sees your prompts. It answers what you actually ask, drops to a fully-offline local model on demand, and phones home to no one.
 
-<table>
-<tr><td><b>Private by construction</b></td><td>Every hosted request is HPKE/OHTTP-encrypted by <a href="https://github.com/OpenGradient/veil">og-veil</a> and run inside a TEE enclave: the relay sees only ciphertext and the enclave never sees who you are. Optional <code>ghost --scrub</code> also strips your name/secrets locally before encryption (off by default, so the agent keeps full fidelity for real work).</td></tr>
-<tr><td><b>Unrestricted, open-weight only</b></td><td>DeepSeek V4 Pro (default), Hermes 4 405B/70B -- open-weight models only. The default is steered to drop the usual refusals; closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list.</td></tr>
-<tr><td><b>Verified responses</b></td><td>og-veil checks the enclave's signature on every response and refuses to emit a token it can't verify.</td></tr>
-<tr><td><b>Offline mode</b></td><td>Opt in with <code>GHOST_LOCAL=1</code> and switch with <code>ghost --local</code> -- a local abliterated model, zero egress, nothing leaves your machine.</td></tr>
-<tr><td><b>Relentless agent</b></td><td>Reads real errors, installs what it's missing, changes tactics, and keeps going until the task is done -- it doesn't stop to ask after one failure.</td></tr>
-<tr><td><b>No memory, no telemetry</b></td><td>Catalog served locally, web search via local <code>ddgs</code>, no third-party search account, isolated state in <code>~/.ghost</code>.</td></tr>
-</table>
+Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
 
----
+## Install (30 seconds)
 
-## Install & update
-
-**macOS only** (the privacy stack runs as launchd services). One deterministic command -- nothing agentic, no LLM in the loop -- installs everything (the engine into `~/.ghost-engine`, leaving any existing `hermes` install untouched; the privacy stack; the `ghost` / `ghost-login` / `ghost-update` commands). The only prerequisite is `git`; the Python side is handled by [uv](https://docs.astral.sh/uv/) (auto-installed), which provisions an isolated Python 3.11 venv from `pyproject.toml` + `uv.lock` -- so it never touches your system Python. The **same command updates** an existing install, and it's idempotent + safe to re-run (it keeps your login, sessions, and denylist):
+macOS only. One deterministic command, no LLM and nothing agentic, installs **and** updates everything (the engine, the privacy stack, the `ghost` commands). uv provisions an isolated Python 3.11 under the hood, so the only prerequisite is `git`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
 ```
 
-From a local clone it's just `./install.sh`; once installed, `ghost update` runs the same thing. Add options before the command, e.g. `GHOST_LOCAL=1 ...` (also install an offline local model), `GHOST_LOCAL_32B=1 ...` (the stronger 32B too, 26GB), or `GHOST_SCRUB=1 ...` (turn on outbound PII/secret redaction). By default ghost is hosted-only -- no Ollama; the fallback and auxiliary tasks run hosted over the same private path.
-
-Then connect once and go:
+Then:
 
 ```bash
-ghost-login        # browser login -> session token for this machine
-ghost              # chat (default: DeepSeek V4 Pro via the TEE gateway)
-ghost --yolo       # auto-accept tool approvals (skip-permissions)
-ghost --resume <session_id>     # resume a past session  (find one with: ghost sessions browse)
-ghost --local      # force the offline local model (needs GHOST_LOCAL)
+ghost-login     # connect your account once (browser login)
+ghost           # start chatting (default: DeepSeek V4 Pro, private via the TEE gateway)
 ```
 
----
+Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`.
 
-## Models
+## Why ghost exists
 
-Switch with `/model` -- all open-weight, nothing closed or refusing:
+Most agents are either useless or creepy for real work. ghost fixes four specific things.
+
+### #1: The model lectures you instead of doing the work
+
+**The problem.** Frontier models refuse, moralize, and water answers down. You ask something direct, security research, something adult, something dual-use, something merely uncomfortable, and you get a disclaimer and a redirect to "safer alternatives."
+
+**The fix.** ghost only connects **open-weight, unrestricted models** (DeepSeek V4 Pro by default; Hermes 4 405B/70B) and applies a per-model steer, so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
+
+### #2: The provider reads everything you send
+
+**The problem.** "Hosted inference" means your prompts, your code, your secrets, whatever you're working on, land in plaintext on someone else's servers, logged and trained on.
+
+**The fix.** Every hosted request is HPKE/OHTTP-encrypted by [og-veil](https://github.com/OpenGradient/veil) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and og-veil verifies the enclave's signature before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
+
+### #3: Your own privacy layer gets in the way
+
+**The problem.** A privacy tool that's too aggressive is worse than none, because it silently corrupts the thing you're working on. ghost learned this the hard way: testing one of our own sites, its secret-scrubber kept rewriting the API key the agent found into `eyJhbG...s0xo`, and the agent burned an hour convinced the key was truncated at the source. It wasn't. The scrubber was.
+
+**The fix.** Redaction is **off by default**. ghost runs full-fidelity, so it sees exactly what you see, which is the whole point during real work like authorized pentesting. Privacy of the hosted path already comes from the TEE, not from blinding the agent. Turn on `ghost --scrub` only when you specifically want your name and secrets stripped before they leave the machine.
+
+### #4: Installing a tool shouldn't require an LLM
+
+**The problem.** "Point your coding agent at this and let it figure out the install" is brittle and, frankly, nerve-wracking. You shouldn't have to trust an LLM to run random commands just to try something.
+
+**The fix.** Install and update are **one deterministic command** (above). It's a plain shell installer; uv provisions an isolated Python 3.11 (it never touches your system Python), and `ghost update` re-runs it. No agent in the loop.
+
+> [!TIP]
+> And it doesn't give up. Most agents stop and ask after the first error; ghost reads the actual error, installs what's missing, changes tactics, and keeps going until the task is done. Set a standing goal with `/goal <objective>` and it works toward it across turns on its own.
+
+## The model line-up
+
+Switch with `/model`, all open-weight, nothing closed or refusing:
 
 | Model | What it is |
 |---|---|
-| `deepseek/deepseek-v4-pro` **(default)** | Strongest open reasoning + coding model; best for agentic work. Uncensored via ghost's per-model steer. |
-| `nous/hermes-4-405b` | Flagship uncensored open model, most steerable. Also the hosted fallback. |
+| `deepseek/deepseek-v4-pro` **(default)** | Strongest open reasoning + coding model; uncensored via ghost's steer. |
+| `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback. |
 | `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
-| local (opt-in) | Abliterated 7B (`ghost-tool`), or 32B (`uncensored-local`) with `GHOST_LOCAL_32B`. Fully offline. |
+| local (opt-in) | Abliterated 7B / 32B via `GHOST_LOCAL`, fully offline, zero egress. |
 
----
+## How the private path works
 
-## How it stays private
-
-Every hosted request takes the same private path: ghost's local bridge hands it to [og-veil](https://github.com/OpenGradient/veil) (the `opengradient-veil` package, the same one the [chat.opengradient.ai](https://chat.opengradient.ai) site uses), which encrypts it and relays it over Oblivious HTTP to a TEE enclave:
+<details>
+<summary>The full request path: bridge → og-veil → TEE enclave</summary>
 
 ```
 ghost engine
@@ -60,16 +76,14 @@ ghost engine
                  └─ TEE enclave   decrypts, runs the model, signs the output
 ```
 
-Two boundaries: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. Redaction is **off by default** so ghost stays full-fidelity (it can read and use secrets during real work, e.g. authorized pentesting); `ghost --scrub` turns on a local pass that strips your name/secrets before encryption. Either way the hosted path is **private, not anonymous**: your OpenGradient account is still authenticated and the relay sees your IP. For true anonymity, use the local model -- zero egress.
+Two boundaries, the same path the [chat.opengradient.ai](https://chat.opengradient.ai) site uses: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. So the hosted path is **private, not anonymous** -- your account is still authenticated and the relay sees your IP. For true anonymity, use the local model (zero egress).
 
----
+</details>
 
 ## Honest limits
 
-- **The local model is opt-in and weaker.** Off by default (install with `GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration under tool-use enforcement.
+- **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
 - **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`, and `ghost update` (not `hermes update`) is what refreshes the fork.
-
----
 
 ## License
 
