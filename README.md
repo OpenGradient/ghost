@@ -1,8 +1,18 @@
+<p align="center">
+  <img src="assets/ghost-banner.png" alt="ghost -- a private, unrestricted agentic harness" width="680">
+</p>
+
 # ghost 👻
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-3DDC97?style=flat-square)](LICENSE) &nbsp;![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square) &nbsp;[![Built on Hermes Agent](https://img.shields.io/badge/built%20on-Hermes%20Agent-7C5CFF?style=flat-square)](https://github.com/NousResearch/hermes-agent) &nbsp;![Open-weight only](https://img.shields.io/badge/models-open--weight%20only-FF8A3D?style=flat-square)
 
 **A private, unrestricted agentic harness.** A real terminal agent that runs commands, edits files, executes code, and searches the web, with every hosted request routed through OpenGradient's TEE gateway so the model provider never sees your prompts. It answers what you actually ask, drops to a fully-offline local model on demand, and phones home to no one.
 
 Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
+
+<p align="center">
+  <img src="assets/ghost-demo.gif" alt="ghost writing and running a port scanner, fully private" width="820">
+</p>
 
 ## Install (30 seconds)
 
@@ -23,7 +33,7 @@ Re-run the same command, or `ghost update`, to update. From a local clone it's j
 
 ## Why ghost exists
 
-Most agents are either useless or creepy for real work. ghost fixes four specific things.
+Most agents are either useless or creepy for real work. ghost fixes the two that matter most.
 
 ### #1: The Model Lectures You Instead of Working
 
@@ -45,35 +55,19 @@ Most agents are either useless or creepy for real work. ghost fixes four specifi
 
 **The Fix.** Every hosted request is HPKE/OHTTP-encrypted by [og-veil](https://github.com/OpenGradient/veil) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and og-veil verifies the enclave's signature before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
 
-### #3: Your Own Privacy Layer Gets in the Way
-
-> "If you think technology can solve your security problems, then you don't understand the problems and you don't understand the technology."
->
-> Bruce Schneier, [Secrets and Lies](https://www.schneier.com/books/secrets-and-lies/)
-
-**The Problem.** A privacy tool that's too aggressive is worse than none, because it silently corrupts the thing you're working on.
-
-<details>
-<summary>How ghost learned this the hard way</summary>
-
-Testing one of our own sites, ghost's secret-scrubber kept rewriting the API key the agent found into `eyJhbG...s0xo`. The agent burned an hour convinced the key was truncated at the source. It wasn't. The scrubber was. That's the day redaction became opt-in.
-
-</details>
-
-**The Fix.** Redaction is **off by default**. ghost runs full-fidelity, so it sees exactly what you see, which is the whole point during real work like authorized pentesting. Privacy of the hosted path already comes from the TEE, not from blinding the agent. Turn on `ghost --scrub` only when you specifically want your name and secrets stripped before they leave the machine.
-
-### #4: Installing a Tool Shouldn't Need an LLM
-
-> "Simplicity is prerequisite for reliability."
->
-> Edsger W. Dijkstra, [EWD498](https://www.cs.utexas.edu/~EWD/transcriptions/EWD04xx/EWD498.html)
-
-**The Problem.** "Point your coding agent at this and let it figure out the install" is brittle and, frankly, nerve-wracking. You shouldn't have to trust an LLM to run random commands just to try something.
-
-**The Fix.** Install and update are **one deterministic command** (above). It's a plain shell installer; uv provisions an isolated Python 3.11 (it never touches your system Python), and `ghost update` re-runs it. No agent in the loop.
-
 > [!TIP]
 > And it doesn't give up. Most agents stop and ask after the first error; ghost reads the actual error, installs what's missing, changes tactics, and keeps going until the task is done. Set a standing goal with `/goal <objective>` and it works toward it across turns on its own.
+
+## ghost vs the alternatives
+
+|  | ghost | a vanilla coding agent | a hosted chat app |
+|---|:---:|:---:|:---:|
+| Provider sees your prompts | **No** -- TEE + OHTTP | Yes | Yes |
+| Refuses / moralizes | **No** -- open-weight + steer | Often | Often |
+| Runs fully offline | **Yes** -- `--local` | No | No |
+| Real terminal + tools | **Yes** | Yes | No |
+| Open-weight models | **Only** | Rarely | Rarely |
+| Install needs an LLM | **No** -- one `curl` | Sometimes | n/a |
 
 ## The model line-up
 
