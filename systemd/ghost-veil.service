@@ -1,0 +1,11 @@
+[Unit]
+Description=ghost og-veil transport (OHTTP relay + TEE verify, localhost :11435)
+
+[Service]
+Environment=OG_VEIL_PORT=11435
+ExecStart=__PYTHON__ -m veil serve --foreground --skip-setup --port 11435
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

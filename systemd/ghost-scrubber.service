@@ -1,0 +1,10 @@
+[Unit]
+Description=ghost PII/secret scrubbing bridge (localhost :8788)
+
+[Service]
+ExecStart=__PYTHON__ __PRIV__/scrubbing_proxy.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
