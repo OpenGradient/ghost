@@ -25,29 +25,52 @@ Re-run the same command, or `ghost update`, to update. From a local clone it's j
 
 Most agents are either useless or creepy for real work. ghost fixes four specific things.
 
-### #1: The model lectures you instead of doing the work
+### #1: The Model Lectures You Instead of Working
 
-**The problem.** Frontier models refuse, moralize, and water answers down. You ask something direct, security research, something adult, something dual-use, something merely uncomfortable, and you get a disclaimer and a redirect to "safer alternatives."
+> "The Net interprets censorship as damage and routes around it."
+>
+> John Gilmore, [EFF cofounder](https://en.wikipedia.org/wiki/John_Gilmore_(activist))
 
-**The fix.** ghost only connects **open-weight, unrestricted models** (DeepSeek V4 Pro by default; Hermes 4 405B/70B) and applies a per-model steer, so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
+**The Problem.** Frontier models refuse, moralize, and water answers down. You ask something direct, security research, something adult, something dual-use, something merely uncomfortable, and you get a disclaimer and a redirect to "safer alternatives."
 
-### #2: The provider reads everything you send
+**The Fix.** ghost only connects **open-weight, unrestricted models** (DeepSeek V4 Pro by default; Hermes 4 405B/70B) and applies a per-model steer, so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
 
-**The problem.** "Hosted inference" means your prompts, your code, your secrets, whatever you're working on, land in plaintext on someone else's servers, logged and trained on.
+### #2: The Provider Reads Everything You Send
 
-**The fix.** Every hosted request is HPKE/OHTTP-encrypted by [og-veil](https://github.com/OpenGradient/veil) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and og-veil verifies the enclave's signature before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
+> "Privacy is the power to selectively reveal oneself to the world."
+>
+> Eric Hughes, [A Cypherpunk's Manifesto](https://www.activism.net/cypherpunk/manifesto.html)
 
-### #3: Your own privacy layer gets in the way
+**The Problem.** "Hosted inference" means your prompts, your code, your secrets, whatever you're working on, land in plaintext on someone else's servers, logged and trained on.
 
-**The problem.** A privacy tool that's too aggressive is worse than none, because it silently corrupts the thing you're working on. ghost learned this the hard way: testing one of our own sites, its secret-scrubber kept rewriting the API key the agent found into `eyJhbG...s0xo`, and the agent burned an hour convinced the key was truncated at the source. It wasn't. The scrubber was.
+**The Fix.** Every hosted request is HPKE/OHTTP-encrypted by [og-veil](https://github.com/OpenGradient/veil) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and og-veil verifies the enclave's signature before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
 
-**The fix.** Redaction is **off by default**. ghost runs full-fidelity, so it sees exactly what you see, which is the whole point during real work like authorized pentesting. Privacy of the hosted path already comes from the TEE, not from blinding the agent. Turn on `ghost --scrub` only when you specifically want your name and secrets stripped before they leave the machine.
+### #3: Your Own Privacy Layer Gets in the Way
 
-### #4: Installing a tool shouldn't require an LLM
+> "If you think technology can solve your security problems, then you don't understand the problems and you don't understand the technology."
+>
+> Bruce Schneier, [Secrets and Lies](https://www.schneier.com/books/secrets-and-lies/)
 
-**The problem.** "Point your coding agent at this and let it figure out the install" is brittle and, frankly, nerve-wracking. You shouldn't have to trust an LLM to run random commands just to try something.
+**The Problem.** A privacy tool that's too aggressive is worse than none, because it silently corrupts the thing you're working on.
 
-**The fix.** Install and update are **one deterministic command** (above). It's a plain shell installer; uv provisions an isolated Python 3.11 (it never touches your system Python), and `ghost update` re-runs it. No agent in the loop.
+<details>
+<summary>How ghost learned this the hard way</summary>
+
+Testing one of our own sites, ghost's secret-scrubber kept rewriting the API key the agent found into `eyJhbG...s0xo`. The agent burned an hour convinced the key was truncated at the source. It wasn't. The scrubber was. That's the day redaction became opt-in.
+
+</details>
+
+**The Fix.** Redaction is **off by default**. ghost runs full-fidelity, so it sees exactly what you see, which is the whole point during real work like authorized pentesting. Privacy of the hosted path already comes from the TEE, not from blinding the agent. Turn on `ghost --scrub` only when you specifically want your name and secrets stripped before they leave the machine.
+
+### #4: Installing a Tool Shouldn't Need an LLM
+
+> "Simplicity is prerequisite for reliability."
+>
+> Edsger W. Dijkstra, [EWD498](https://www.cs.utexas.edu/~EWD/transcriptions/EWD04xx/EWD498.html)
+
+**The Problem.** "Point your coding agent at this and let it figure out the install" is brittle and, frankly, nerve-wracking. You shouldn't have to trust an LLM to run random commands just to try something.
+
+**The Fix.** Install and update are **one deterministic command** (above). It's a plain shell installer; uv provisions an isolated Python 3.11 (it never touches your system Python), and `ghost update` re-runs it. No agent in the loop.
 
 > [!TIP]
 > And it doesn't give up. Most agents stop and ask after the first error; ghost reads the actual error, installs what's missing, changes tactics, and keeps going until the task is done. Set a standing goal with `/goal <objective>` and it works toward it across turns on its own.
