@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/ghost-banner.png" alt="ghost -- a private, unrestricted agentic harness" width="680">
-</p>
-
 # ghost 👻
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3DDC97?style=flat-square)](LICENSE) &nbsp;![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square) &nbsp;[![Built on Hermes Agent](https://img.shields.io/badge/built%20on-Hermes%20Agent-7C5CFF?style=flat-square)](https://github.com/NousResearch/hermes-agent) &nbsp;![Open-weight only](https://img.shields.io/badge/models-open--weight%20only-FF8A3D?style=flat-square)
