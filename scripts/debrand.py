@@ -26,6 +26,15 @@ SUBS = [
     ("Hermes CLI", "Ghost CLI"),
     ("chat with Hermes", "chat with Ghost"),
     ("[Hermes #", "[Ghost #"),
+    # Resume / -c hints: show the `ghost` command (not `hermes`), and drop the `-p <profile>`
+    # suffix the upstream hint appends -- the ghost launcher adds the profile itself, so keeping
+    # it would double the flag and break copy-paste resume. Profile-flag forms first, then general.
+    ("hermes --resume {self.session_id}{profile_flag}", "ghost --resume {self.session_id}"),
+    ('hermes -c \\"{session_title}\\"{profile_flag}', 'ghost -c \\"{session_title}\\"'),
+    ("hermes --tui --resume ", "ghost --resume "),
+    ("hermes --tui -c ", "ghost -c "),
+    ("hermes --resume ", "ghost --resume "),
+    ("hermes -c ", "ghost -c "),
 ]
 
 # The block-letter title + the figure art (defined as `NAME = """..."""` constants,
