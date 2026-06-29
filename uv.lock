@@ -1129,7 +1129,7 @@ presidio = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "opengradient", specifier = ">=1.1.1" },
-    { name = "opengradient-veil", specifier = ">=0.2.7,<0.3" },
+    { name = "opengradient-veil", specifier = ">=0.2.8,<0.3" },
     { name = "presidio-analyzer", marker = "extra == 'presidio'" },
     { name = "presidio-anonymizer", marker = "extra == 'presidio'" },
     { name = "spacy", marker = "extra == 'presidio'" },
@@ -2174,7 +2174,7 @@ wheels = [
 
 [[package]]
 name = "opengradient-veil"
-version = "0.2.7"
+version = "0.2.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -2182,9 +2182,9 @@ dependencies = [
     { name = "opengradient" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d7/46/3d38b15b95bef63890b6d23d9ca781f286b773b5b28ae16b69518e1012af/opengradient_veil-0.2.7.tar.gz", hash = "sha256:da15a89bbc42ff21cdc54f02605813fddeaf93a3021be0d832f7489000350d7c", size = 307771, upload-time = "2026-06-16T19:32:30.387Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4b/d4/5f2c3fab0fef5c196fd116c222de72290d4b09b7d7ba04be010f6a315682/opengradient_veil-0.2.8.tar.gz", hash = "sha256:a84d119f197be5841fb21ba4596021a8b17f7a6b535453a49fd78cb8198c4877", size = 310878, upload-time = "2026-06-26T19:25:10.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/80/c25a032b14fe4434e614a5185f73da62b8938249c69599f64a1c78e43085/opengradient_veil-0.2.7-py3-none-any.whl", hash = "sha256:9bab44e47eb7fd85974baa6a6e2f49723613933c17e121f1776dbf4e75522fac", size = 27288, upload-time = "2026-06-16T19:32:31.482Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/94/e39470395e293016d43bae4a842053a3529b66ac5ed76ca29e93f79f2382/opengradient_veil-0.2.8-py3-none-any.whl", hash = "sha256:071dc7a10a02f9fa39c41e5c54120fe5e1c24a9b0f6e4e873ec7ae32b6e6f8f6", size = 29142, upload-time = "2026-06-26T19:25:09.551Z" },
 ]
 
 [[package]]
