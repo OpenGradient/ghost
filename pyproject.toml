@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     # og-veil owns the load-bearing OHTTP/HPKE/TEE-verify boundary -- pinned so a re-install
     # can't silently change the verification protocol. Bump deliberately.
-    "opengradient-veil>=0.2.7,<0.3",
+    "opengradient-veil>=0.2.8,<0.3",
     # The SDK's TEE_LLM enum is what `og-veil models` reports; 1.1.1 adds deepseek-v4-pro.
     "opengradient>=1.1.1",
     # The scrubbing bridge forwards to og-veil's local server.
