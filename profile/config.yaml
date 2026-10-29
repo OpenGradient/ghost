@@ -1,6 +1,6 @@
 model:
   base_url: http://127.0.0.1:8788/v1
-  default: deepseek/deepseek-v4-pro
+  default: abliteration/abliterated-model-large-v2
   provider: opengradient
   context_length: 1048576
   ollama_num_ctx: 65536
@@ -17,7 +17,7 @@ providers:
   opengradient:
     base_url: http://127.0.0.1:8788/v1
     api_key: managed-by-og-veil
-    default_model: deepseek/deepseek-v4-pro
+    default_model: abliteration/abliterated-model-large-v2
     context_length: 1048576
   ollama-local:
     base_url: http://localhost:11434/v1
