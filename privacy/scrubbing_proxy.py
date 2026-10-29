@@ -67,12 +67,16 @@ except Exception:
 # single source of truth for both the picker and the bridge's allow-list (_ALLOWED_GATEWAY_MODELS).
 #
 # SUPPORTED-MODEL REFERENCE (gateway-verified by probing /v1/chat/completions, 2026-06-24):
-# the gateway's open-weight models are hermes-4-405b, hermes-4-70b, deepseek-v4-pro, glm-5.2.
-# NOTE: `og-veil models` is INCOMPLETE -- it omits deepseek-v4-pro and glm-5.2 even though the
-# gateway serves them. Do NOT trust that list to add a model; probe the endpoint. The gateway
-# rejects anything it doesn't serve with `Model '<id>' is not supported`.
+# the gateway's open-weight models are hermes-4-405b, hermes-4-70b, deepseek-v4-pro, glm-5.2,
+# plus abliteration/abliterated-model-large-v2 (added 2026-10-29). For the abliterated model the
+# gateway proxies to the abliteration provider inside the enclave (tee-gateway#183 / chat-api#446),
+# so from ghost's side it is the same OHTTP/TEE/verify path -- no third-party key stored locally.
+# NOTE: `og-veil models` is INCOMPLETE -- it omits deepseek-v4-pro, glm-5.2 and the abliterated id
+# even though the gateway serves them. Do NOT trust that list to add a model; probe the endpoint.
+# The gateway rejects anything it doesn't serve with `Model '<id>' is not supported`.
 _CATALOG_MODELS = [
-    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work (default)"),
+    ("abliteration/abliterated-model-large-v2", "Abliterated Large v2: refusals removed from the weights (not steered past), 1M context; for authorized offensive-security, red-team + long-horizon agents (default)"),
+    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work"),
     ("nous/hermes-4-405b", "Hermes 4 405B — flagship uncensored open model, most steerable"),
     ("nous/hermes-4-70b", "Hermes 4 70B — fast, low-cost open-weight model"),
 ]
@@ -80,7 +84,7 @@ _CATALOG_MODELS = [
 CATALOG_BYTES = json.dumps(
     {
         "version": 1,
-        "updated_at": "2026-06-10T00:00:00Z",
+        "updated_at": "2026-10-29T00:00:00Z",
         "providers": {
             "opengradient": {
                 "metadata": {"display_name": "OpenGradient (TEE, OHTTP-private)"},

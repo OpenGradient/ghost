@@ -274,7 +274,7 @@ def test_stream_multiline_data_frame_deanonymized():
 def test_catalog_is_open_weight_only():
     # ghost must only offer/allow OPEN-WEIGHT models; no closed/refusing ones.
     allowed = sp._ALLOWED_GATEWAY_MODELS
-    assert allowed == {"hermes-4-405b", "hermes-4-70b", "deepseek-v4-pro"}
+    assert allowed == {"abliterated-model-large-v2", "hermes-4-405b", "hermes-4-70b", "deepseek-v4-pro"}
     blob = json.dumps(sp._CATALOG_MODELS).lower()
     for closed in ("claude", "gpt-", "gemini", "grok", "anthropic", "seed-"):
         assert closed not in blob, f"closed model '{closed}' must not be in the catalog"
