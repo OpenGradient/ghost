@@ -70,6 +70,7 @@ Copy-Item "$RepoRoot\privacy\*.py" $Priv -Force
 # --- 3. uncensored profile -----------------------------------------------------------------
 Say "Writing the uncensored profile"
 New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
+foreach ($f in "config.yaml","SOUL.md") { if (Test-Path "$ProfileDir\$f") { Copy-Item "$ProfileDir\$f" "$ProfileDir\.$f.was" -Force } }
 $LocalModel = "ghost-tool:latest"
 $homeFwd = ($env:USERPROFILE -replace '\\','/')
 (Get-Content -Raw -Encoding UTF8 "$RepoRoot\profile\config.yaml") -replace '__HOME__',$homeFwd -replace '__LOCAL_MODEL__',$LocalModel |
@@ -111,6 +112,13 @@ if ($Scrub) {
   & $Py -m spacy download en_core_web_md 2>$null
   & $Py -c "import en_core_web_md" 2>$null
   if ($LASTEXITCODE -eq 0) { Set-Content "$Priv\.presidio" "" -Encoding ascii }
+}
+
+# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
+foreach ($f in "config.yaml","SOUL.md") {
+  if (-not (Test-Path "$ProfileDir\.$f.was")) { continue }
+  if ((Get-FileHash "$ProfileDir\.$f.was").Hash -eq (Get-FileHash "$ProfileDir\$f").Hash) { Remove-Item "$ProfileDir\.$f.was" }
+  else { Move-Item -Force "$ProfileDir\.$f.was" "$ProfileDir\$f.prev"; Write-Host "   your previous $f is kept as $ProfileDir\$f.prev" }
 }
 
 # --- 4. privacy services via Task Scheduler (scrubber :8788 + og-veil :11435) --------------

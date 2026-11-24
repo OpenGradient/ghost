@@ -145,6 +145,7 @@ fi
 # ---------- 3. uncensored profile ----------
 say "Writing the uncensored profile"
 mkdir -p "$PROFILE"
+for f in config.yaml SOUL.md; do [ ! -f "$PROFILE/$f" ] || cp -p "$PROFILE/$f" "$PROFILE/.$f.was"; done
 sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
@@ -202,6 +203,12 @@ else
   rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
   say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
 fi
+# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
+for f in config.yaml SOUL.md; do
+  [ -f "$PROFILE/.$f.was" ] || continue
+  if cmp -s "$PROFILE/.$f.was" "$PROFILE/$f"; then rm -f "$PROFILE/.$f.was"
+  else mv -f "$PROFILE/.$f.was" "$PROFILE/$f.prev"; echo "   your previous $f is kept as $PROFILE/$f.prev"; fi
+done
 # Run the privacy services (scrubber :8788 + og-veil :11435) as managed, auto-restarting
 # background services -- launchd on macOS, systemd --user on Linux/WSL2 (with a plain
 # background-process fallback). Both talk to chat-api directly (content private via OHTTP/TEE).

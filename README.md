@@ -33,7 +33,7 @@ ghost-login     # connect your account once (browser login)
 ghost           # start chatting (default: Abliterated Large v2, private via the TEE gateway)
 ```
 
-Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`. Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips those downloads.
+Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`. Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips those downloads. An update installs that release's `config.yaml` and `SOUL.md`; yours are kept beside them as `.prev`.
 
 ## Why ghost exists
 
