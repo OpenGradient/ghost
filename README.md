@@ -33,6 +33,8 @@ ghost-login     # connect your account once (browser login)
 ghost           # start chatting (default: Abliterated Large v2, private via the TEE gateway)
 ```
 
+Headless box, SSH, or the browser can't call back to your machine? The login page shows a `ghost-login --token-b64 '...'` command -- copy the whole line into your terminal and you're in, no prompts. Or copy the token and just run `ghost-login --paste`: it pulls the token straight from your clipboard.
+
 Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`.
 
 ## Why ghost exists
@@ -79,8 +81,8 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 |---|---|
 | `abliteration/abliterated-model-large-v2` **(default)** | Uncensored by abliteration, with refusals removed from the weights rather than steered past. 1M context; built for authorized offensive-security, red-team and long-horizon agent work. |
 | `deepseek/deepseek-v4-pro` | Strongest open reasoning + coding model; uncensored via ghost's steer. |
+| `abliteration/deepseek-v4.1-flash-abliterated` | Fast, very low-cost abliterated DeepSeek; runs ghost's auxiliary tasks (titles, compression, etc.). |
 | `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback. |
-| `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
 | local (opt-in) | Abliterated 7B / 32B via `GHOST_LOCAL`, fully offline, zero egress. |
 
 ## How the private path works
