@@ -1,0 +1,7 @@
+# The exact upstream Hermes Agent release ghost is built on (scripts/fork-engine.sh and .ps1 read this).
+#
+# To move to a newer release: change both values, rebuild with scripts/fork-engine.sh, and run
+# `pytest tests/`. The fork refuses a tag that doesn't resolve to this commit, and fails if any
+# debrand patch no longer applies.
+HERMES_VERSION=0.23.4
+HERMES_COMMIT=8fc0374447313e276f6b9a2764bfc750190c966a

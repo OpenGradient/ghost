@@ -20,6 +20,8 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
   field that is not scrubbed, a placeholder that is de-anonymized into an egress tool, or the
   inference route being repointed away from the local scrubber.
 - **A response accepted without verification** (the verify-before-emit guarantee bypassed).
+- **The engine phoning home** -- an update check, telemetry, a remote catalog or plugin fetch, or a
+  side task that leaves the private path.
 
 ## Scope
 
@@ -32,3 +34,8 @@ underlying agent engine is [Hermes Agent](https://hermes-agent.nousresearch.com)
 
 The scrubber's own test suite guards against leak regressions (`pytest tests/`, including the
 golden leak canary). Run it before sending a change that touches `privacy/`.
+
+The engine is pinned in `engine.pin`. To move it: change both lines there, run
+`scripts/fork-engine.sh` (it stops if a privacy patch no longer applies to the new release), then
+`GHOST_ENGINE=~/.ghost-engine pytest tests/test_engine.py`, which checks that the profile matches the
+release's config schema and that nothing phones home. CI does the same on macOS, Linux and Windows.

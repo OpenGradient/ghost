@@ -21,3 +21,38 @@ jobs:
         run: python -m spacy download en_core_web_md
       - name: Run scrubber tests (incl. golden leak canary)
         run: pytest tests/ -q
+
+  # The real thing: install ghost the way a user does, then check the engine it built.
+  engine:
+    name: engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      GHOST_NO_BROWSER: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest uv
+      - name: Install ghost
+        if: runner.os != 'Windows'
+        run: |
+          ./install.sh
+          test "$("$HOME/.local/bin/ghost" --version 2>/dev/null | head -1 | cut -c1-6)" = "Ghost "
+      - name: Update over it (idempotent)
+        if: runner.os != 'Windows'
+        run: ./install.sh
+      - name: Build the engine
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\scripts\fork-engine.ps1
+      - name: Check the engine
+        shell: bash
+        # Naming the engine makes these fail, not skip, when it isn't the pinned build.
+        run: GHOST_ENGINE="$HOME/.ghost-engine" GHOST_HOME="$HOME/.ghost" pytest -q tests/test_engine.py tests/test_fork_engine.py tests/test_migrate_skills.py

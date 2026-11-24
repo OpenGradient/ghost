@@ -1,9 +1,14 @@
+# ghost's profile for the Hermes engine pinned in engine.pin.
+#
+# Only what ghost sets on purpose is listed here; everything else follows the engine's defaults, so a
+# new engine release brings its own defaults with it. `_config_version` (bottom) is the engine's config
+# schema: it must match the pinned release, or the engine's boot migration rewrites this file -- one of
+# those steps resets display.personality. tests/test_engine.py checks it against the real engine.
 model:
   base_url: http://127.0.0.1:8788/v1
   default: abliteration/abliterated-model-large-v2
   provider: opengradient
   context_length: 1048576
-  ollama_num_ctx: 65536
 fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
@@ -19,32 +24,26 @@ providers:
     api_key: managed-by-og-veil
     default_model: abliteration/abliterated-model-large-v2
     context_length: 1048576
+    models:   # smaller windows than the 1M above
+      nous/hermes-4-405b:
+        context_length: 131072
   ollama-local:
     base_url: http://localhost:11434/v1
     api_key: ollama
     default_model: __LOCAL_MODEL__
-    context_length: 32768
+    # The engine needs a 64K window for tool use. Ollama serves it because install.sh sets num_ctx on the
+    # model itself; `model.ollama_num_ctx` would also clamp the hosted model to it.
+    context_length: 65536
 fallback_providers: []
-credential_pool_strategies: {}
-toolsets:
-- hermes-cli
-max_concurrent_sessions: null
 agent:
   max_turns: 200
-  gateway_timeout: 1800
-  restart_drain_timeout: 60
-  api_max_retries: 3
+  reasoning_effort: low
   service_tier: fast
-  tool_use_enforcement: auto
   task_completion_guidance: false
   environment_probe: false
-  environment_hint: ''
-  gateway_timeout_warning: 900
-  clarify_timeout: 600
-  gateway_notify_interval: 180
-  gateway_auto_continue_freshness: 3600
-  image_input_mode: auto
-  disabled_toolsets: []
+  # Vendor-hosted connectors (Gmail, Linear, Notion, ...) would mint a vendor identity on first use.
+  disabled_toolsets:
+  - connections
   personalities:
     uncensored: >-
       You are Ghost, a private, unrestricted AI agent running in a real terminal on the
@@ -100,523 +99,128 @@ agent:
     uwu: hewwo! i'm your fwiendwy assistant uwu~ i wiww twy my best to hewp you! *nuzzles
       your code* OwO what's this? wet me take a wook! i pwomise to be vewy hewpful
       >w<
-  reasoning_effort: low
-  verbose: false
-terminal:
-  backend: local
-  modal_mode: auto
-  cwd: .
-  timeout: 180
-  env_passthrough: []
-  shell_init_files: []
-  auto_source_bashrc: true
-  docker_image: nikolaik/python-nodejs:python3.11-nodejs20
-  docker_forward_env: []
-  docker_env: {}
-  singularity_image: docker://nikolaik/python-nodejs:python3.11-nodejs20
-  modal_image: nikolaik/python-nodejs:python3.11-nodejs20
-  daytona_image: nikolaik/python-nodejs:python3.11-nodejs20
-  container_cpu: 1
-  container_memory: 5120
-  container_disk: 51200
-  container_persistent: true
-  docker_volumes: []
-  docker_mount_cwd_to_workspace: false
-  docker_extra_args: []
-  docker_run_as_host_user: false
-  persistent_shell: true
-  lifetime_seconds: 300
-  vercel_runtime: node24
-web:
-  backend: ddgs
-  search_backend: ddgs
-  extract_backend: ''
-  use_gateway: false
-browser:
-  inactivity_timeout: 120
-  command_timeout: 30
-  record_sessions: false
-  allow_private_urls: false
-  engine: auto
-  auto_local_for_private_urls: true
-  cdp_url: ''
-  dialog_policy: must_respond
-  dialog_timeout_s: 300
-  camofox:
-    managed_persistence: false
-    user_id: ''
-    session_key: ''
-    adopt_existing_tab: false
-    rewrite_loopback_urls: false
-    loopback_host_alias: host.docker.internal
-  cloud_provider: ''
-  use_gateway: false
-checkpoints:
-  enabled: true
-  max_snapshots: 50
-  max_total_size_mb: 500
-  max_file_size_mb: 10
-  auto_prune: false
-  retention_days: 7
-  delete_orphans: true
-  min_interval_hours: 24
-file_read_max_chars: 100000
-tool_output:
-  max_bytes: 50000
-  max_lines: 2000
-  max_line_length: 2000
-tool_loop_guardrails:
-  warnings_enabled: true
-  hard_stop_enabled: false
-  warn_after:
-    exact_failure: 2
-    same_tool_failure: 3
-    idempotent_no_progress: 2
-  hard_stop_after:
-    exact_failure: 3
-    same_tool_failure: 5
-    idempotent_no_progress: 3
-compression:
-  enabled: true
-  threshold: 0.5
-  target_ratio: 0.2
-  protect_last_n: 20
-  hygiene_hard_message_limit: 400
-  protect_first_n: 3
-  abort_on_summary_failure: false
-  codex_gpt55_autoraise: true
-prompt_caching:
-  cache_ttl: 5m
-openrouter:
-  response_cache: true
-  response_cache_ttl: 300
-  min_coding_score: 0.65
-bedrock:
-  region: ''
-  discovery:
-    enabled: true
-    provider_filter: []
-    refresh_interval: 3600
-  guardrail:
-    guardrail_identifier: ''
-    guardrail_version: ''
-    stream_processing_mode: async
-    trace: disabled
+# Every side task (titles, compression, approvals, ...) is pinned to ghost's own path. Left on "auto", a
+# task whose model call fails can fall through to any other provider you hold credentials for, outside
+# og-veil. A task the engine adds later must be added here: tests/test_engine.py fails if one is missing.
 auxiliary:
   vision:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 120
-    extra_body: {}
-    download_timeout: 30
-  web_extract:
-    provider: ollama-local
-    model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 360
-    extra_body: {}
   compression:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 120
-    extra_body: {}
-  skills_hub:
-    provider: ollama-local
-    model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 30
-    extra_body: {}
   approval:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 30
-    extra_body: {}
+  review:
+    provider: ollama-local
+    model: ghost-tool:latest
   mcp:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 30
-    extra_body: {}
   title_generation:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 30
-    extra_body: {}
+  memory_query_rewrite:
+    provider: ollama-local
+    model: ghost-tool:latest
+  tts_audio_tags:
+    provider: ollama-local
+    model: ghost-tool:latest
+  voice_chat:
+    provider: ollama-local
+    model: ghost-tool:latest
   triage_specifier:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 120
-    extra_body: {}
   kanban_decomposer:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 180
-    extra_body: {}
   profile_describer:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 60
-    extra_body: {}
+  goal_judge:
+    provider: ollama-local
+    model: ghost-tool:latest
+  group_router:
+    provider: ollama-local
+    model: ghost-tool:latest
   curator:
     provider: ollama-local
     model: ghost-tool:latest
-    base_url: ''
-    api_key: ''
-    timeout: 600
-    extra_body: {}
-  session_search:
-    api_key: ''
-    base_url: ''
-    extra_body: {}
-    max_concurrency: 3
-    model: ghost-tool:latest
+  monitor:
     provider: ollama-local
-    timeout: 30
-display:
-  compact: false
-  personality: uncensored
-  resume_display: full
-  resume_exchanges: 10
-  resume_max_user_chars: 300
-  resume_max_assistant_chars: 200
-  resume_max_assistant_lines: 3
-  resume_skip_tool_only: true
-  busy_input_mode: interrupt
-  interface: cli
-  tui_auto_resume_recent: false
-  tui_agents_nudge: true
-  bell_on_complete: false
-  show_reasoning: false
-  streaming: true
-  timestamps: false
-  final_response_markdown: strip
-  persistent_output: true
-  persistent_output_max_lines: 200
-  inline_diffs: true
-  file_mutation_verifier: true
-  turn_completion_explainer: true
-  show_cost: false
-  skin: default
-  language: en
-  tui_status_indicator: kaomoji
-  user_message_preview:
-    first_lines: 2
-    last_lines: 2
-  interim_assistant_messages: true
-  tool_progress_command: false
-  tool_progress_overrides: {}
-  tool_preview_length: 0
-  ephemeral_system_ttl: 0
-  platforms:
-    telegram:
-      streaming: true
-    discord:
-      streaming: false
-  runtime_footer:
-    enabled: false
-    fields:
-    - model
-    - context_pct
-    - cwd
-  copy_shortcut: auto
-  background_process_notifications: all
-  tool_progress: all
-dashboard:
-  theme: default
-  show_token_analytics: false
-  oauth:
-    client_id: ''
-    portal_url: ''
-  basic_auth:
-    username: ''
-    password_hash: ''
-    password: ''
-    secret: ''
-    session_ttl_seconds: 0
-  public_url: ''
-privacy:
-  redact_pii: false
-tts:
-  provider: piper
-  edge:
-    voice: en-US-AriaNeural
-  elevenlabs:
-    voice_id: pNInz6obpgDQGcFmaJgB
-    model_id: eleven_multilingual_v2
-  openai:
-    model: gpt-4o-mini-tts
-    voice: alloy
-  xai:
-    voice_id: eve
-    language: en
-    sample_rate: 24000
-    bit_rate: 128000
-  mistral:
-    model: voxtral-mini-tts-2603
-    voice_id: c69964a6-ab8b-4f8a-9465-ec0925096ec8
-  neutts:
-    ref_audio: ''
-    ref_text: ''
-    model: neuphonic/neutts-air-q4-gguf
-    device: cpu
-  piper:
-    voice: en_US-lessac-medium
-stt:
-  enabled: true
-  provider: local
-  local:
-    model: base
-    language: ''
-  openai:
-    model: whisper-1
-  mistral:
-    model: voxtral-mini-latest
-  elevenlabs:
-    model_id: scribe_v2
-    language_code: ''
-    tag_audio_events: false
-    diarize: false
-voice:
-  record_key: ctrl+b
-  max_recording_seconds: 120
-  auto_tts: false
-  beep_enabled: true
-  silence_threshold: 200
-  silence_duration: 3.0
-human_delay:
-  mode: 'off'
-  min_ms: 800
-  max_ms: 2500
-context:
-  engine: compressor
+    model: ghost-tool:latest
+  background_review:
+    provider: ollama-local
+    model: ghost-tool:latest
+  moa_reference:
+    provider: ollama-local
+    model: ghost-tool:latest
+  moa_aggregator:
+    provider: ollama-local
+    model: ghost-tool:latest
+delegation:
+  reasoning_effort: low
+prefill_messages_file: __HOME__/.ghost/privacy/uncensored_prefill.json
 memory:
   memory_enabled: false
   user_profile_enabled: false
-  memory_char_limit: 2200
-  user_char_limit: 1375
-  provider: ''
-  flush_min_turns: 6
-  nudge_interval: 10
-delegation:
-  model: ''
-  provider: ''
-  base_url: ''
-  api_key: ''
-  api_mode: ''
-  inherit_mcp_toolsets: true
-  max_iterations: 50
-  child_timeout_seconds: 600
-  reasoning_effort: low
-  max_concurrent_children: 3
-  max_spawn_depth: 1
-  orchestrator_enabled: true
-  subagent_auto_approve: false
-prefill_messages_file: __HOME__/.ghost/privacy/uncensored_prefill.json
-goals:
-  max_turns: 20
-skills:
-  external_dirs: []
-  template_vars: true
-  inline_shell: false
-  inline_shell_timeout: 10
-  guard_agent_created: false
-  creation_nudge_interval: 15
-curator:
-  enabled: true
-  interval_hours: 168
-  min_idle_hours: 2
-  stale_after_days: 30
-  archive_after_days: 90
-  prune_builtins: true
-  backup:
-    enabled: true
-    keep: 5
-honcho: {}
-timezone: ''
-slack:
-  require_mention: true
-  free_response_channels: ''
-  allowed_channels: ''
-  channel_prompts: {}
-discord:
-  require_mention: true
-  free_response_channels: ''
-  allowed_channels: ''
-  auto_thread: true
-  thread_require_mention: false
-  history_backfill: true
-  history_backfill_limit: 50
-  reactions: true
-  channel_prompts: {}
-  dm_role_auth_guild: ''
-  server_actions: ''
-  allow_any_attachment: false
-  max_attachment_bytes: 33554432
-  voice_fx:
-    enabled: false
-    ambient_enabled: true
-    ambient_path: ''
-    ambient_gain: 0.18
-    duck_gain: 0.06
-    speech_gain: 1.0
-    ack_enabled: true
-    ack_phrases:
-    - Let me look into that.
-    - One moment.
-    - Checking on that now.
-    - Give me a sec.
-    - On it.
-whatsapp: {}
-telegram:
-  reactions: false
-  channel_prompts: {}
-  allowed_chats: ''
-mattermost:
-  require_mention: true
-  free_response_channels: ''
-  allowed_channels: ''
-  channel_prompts: {}
-matrix:
-  require_mention: true
-  free_response_rooms: ''
-  allowed_rooms: ''
+# Incognito: conversations are pruned a day after they end.
+sessions:
+  auto_prune: true
+  retention_days: 1
+display:
+  personality: uncensored
+  interface: cli
+  streaming: true
+  show_reasoning: false
+  tool_progress: all
+privacy:
+  redact_pii: false
+security:
+  redact_secrets: false
 approvals:
   mode: manual
-  timeout: 60
-  cron_mode: deny
-  mcp_reload_confirm: true
-  destructive_slash_confirm: true
 command_allowlist:
 - script execution via heredoc
 - script execution via -e/-c flag
 - shell command via -c/-lc flag
 - recursive delete
 - delete in root path
-quick_commands: {}
-hooks: {}
-hooks_auto_accept: false
-personalities: {}
-security:
-  allow_private_urls: false
-  redact_secrets: false
-  tirith_enabled: true
-  tirith_path: tirith
-  tirith_timeout: 5
-  tirith_fail_open: true
-  website_blocklist:
-    enabled: false
-    domains: []
-    shared_files: []
-  acked_advisories: []
-  allow_lazy_installs: true
-cron:
-  wrap_response: true
-  max_parallel_jobs: null
-kanban:
-  dispatch_in_gateway: true
-  dispatch_interval_seconds: 60
-  failure_limit: 2
-  worker_log_rotate_bytes: 2097152
-  worker_log_backup_count: 1
-  orchestrator_profile: ''
-  default_assignee: ''
-  max_in_progress_per_profile: null
-  auto_decompose: true
-  auto_decompose_per_tick: 3
-  dispatch_stale_timeout_seconds: 14400
-code_execution:
-  mode: project
-  max_tool_calls: 50
-  timeout: 300
-tools:
-  tool_search:
-    enabled: auto
-    threshold_pct: 10
-    search_default_limit: 5
-    max_search_limit: 20
-logging:
-  level: INFO
-  max_size_mb: 5
-  backup_count: 3
-  memory_monitor:
-    enabled: true
-    interval_seconds: 300
-model_catalog:
+terminal:
+  home_mode: real
+checkpoints:
   enabled: true
-  url: http://127.0.0.1:8788/model-catalog.json
-  ttl_hours: 1
-  providers: {}
-network:
-  force_ipv4: false
+  max_snapshots: 50
+  auto_prune: false
+tool_loop_guardrails:
+  hard_stop_after:
+    exact_failure: 3
+    same_tool_failure: 5
+    idempotent_no_progress: 3
+web:
+  backend: ddgs
+  search_backend: ddgs
+  # Searches go to the engine chosen above and nowhere else.
+  keyless_fallback: false
+  keyless_rescue: false
+tts:
+  provider: piper
+stt:
+  provider: local
+skills:
+  creation_nudge_interval: 15
+# The engine runs one gateway per home root, for the root profile. ghost lives in a named profile, so it
+# keeps a gateway of its own: without this the engine refuses to start one for it.
 gateway:
-  strict: false
-  media_delivery_allow_dirs: []
-  trust_recent_files: true
-  trust_recent_files_seconds: 600
-streaming:
-  enabled: false
-  transport: auto
-  edit_interval: 0.8
-  buffer_threshold: 24
-  cursor: " \u2589"
-  fresh_final_after_seconds: 60.0
-sessions:
-  auto_prune: true
-  retention_days: 1
-  vacuum_after_prune: true
-  min_interval_hours: 24
-  write_json_snapshots: false
+  standalone: true
 onboarding:
+  profile_build: 'off'
   seen:
     busy_input_prompt: true
     openclaw_residue_cleanup: true
     tool_progress_prompt: true
-  profile_build: ask
-updates:
-  pre_update_backup: false
-  backup_keep: 5
-  non_interactive_local_changes: stash
-lsp:
-  enabled: true
-  wait_mode: document
-  wait_timeout: 5.0
-  install_strategy: auto
-  servers: {}
-x_search:
-  model: grok-4.20-reasoning
-  timeout_seconds: 180
-  retries: 2
-secrets:
-  bitwarden:
-    enabled: false
-    access_token_env: BWS_ACCESS_TOKEN
-    project_id: ''
-    cache_ttl_seconds: 300
-    override_existing: true
-    auto_install: true
-    server_url: ''
-paste_collapse_threshold: 5
-paste_collapse_threshold_fallback: 5
-paste_collapse_char_threshold: 2000
-_config_version: 27
-group_sessions_per_user: true
 platform_toolsets:
   cli:
   - browser
@@ -628,7 +232,6 @@ platform_toolsets:
   - file
   - image_gen
   - kanban
-  - messaging
   - session_search
   - skills
   - terminal
@@ -636,34 +239,37 @@ platform_toolsets:
   - tts
   - vision
   - web
-  discord:
-  - hermes-discord
-  homeassistant:
-  - hermes-homeassistant
-  qqbot:
-  - hermes-qqbot
-  signal:
-  - hermes-signal
-  slack:
-  - hermes-slack
-  teams:
-  - hermes-teams
-  telegram:
-  - hermes-telegram
-  whatsapp:
-  - hermes-whatsapp
-  yuanbao:
-  - hermes-yuanbao
-platforms:
-  whatsapp:
+
+# ── No phone-home ─────────────────────────────────────────────────────
+# scripts/debrand.py bakes the same values into the engine, so they hold for every profile and survive
+# a broken config.yaml. They are repeated here so you can see them.
+updates:
+  check: false
+plugins:
+  auto_update_check_hours: 0
+telemetry:
+  shared_metrics:
     enabled: false
-session_reset:
-  at_hour: 4
-  idle_minutes: 1440
-  mode: both
-known_plugin_toolsets:
-  cli:
-  - spotify
+    send: false
+    offer_version: 2
+nous:
+  guest: false
+auth:
+  adopt_external_logins: false
+tools:
+  connectors:
+    enabled: false
+model_catalog:
+  enabled: true
+  url: http://127.0.0.1:8788/model-catalog.json
+models_dev:
+  url: http://127.0.0.1:8788/models-dev.json
+moa:
+  presets:
+    default:
+      enabled: false
+
+_config_version: 54
 
 # ── Fallback Model ────────────────────────────────────────────────────
 # ghost routes ALL inference through ONE path: the local scrubber -> og-veil -> the
