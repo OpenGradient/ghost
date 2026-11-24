@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -56,11 +57,11 @@ class Box:
         return log.read_text().splitlines() if log.exists() else []
 
     def process(self, command):
-        """A process that shows up in `ps` as `command`."""
-        proc = subprocess.Popen(["bash", "-c", 'exec -a "$0" sleep 60', command])
+        """A process whose line in `ps` contains `command`, well past 80 columns (Linux cuts there by default)."""
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-" * 80, command])
         self.procs.append(proc)
         deadline = time.time() + 5
-        while command not in subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout:
+        while command not in subprocess.run(["ps", "axww", "-o", "command="], capture_output=True, text=True).stdout:
             assert time.time() < deadline
             time.sleep(0.05)
         return proc

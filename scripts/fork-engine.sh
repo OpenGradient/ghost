@@ -47,7 +47,7 @@ HERMES_VERSION="" HERMES_COMMIT=""
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
   local pids
-  pids="$(ps -axo pid=,command= 2>/dev/null | awk -v e="$ENG" \
+  pids="$(ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" \
     '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2
@@ -55,7 +55,7 @@ check_closed() {
 }
 service_installed() { [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; }
 gateway_running() {
-  ps -axo command= 2>/dev/null | awk -v e="$ENG" 'index($0, e "/") && /gateway run/ { f = 1 } END { exit !f }'
+  ps axww -o command= 2>/dev/null | awk -v e="$ENG" 'index($0, e "/") && /gateway run/ { f = 1 } END { exit !f }'
 }
 
 case "${1:-}" in
