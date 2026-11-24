@@ -57,7 +57,8 @@ function Test-Launches {
 function Get-EngineProcess {
   @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.CommandLine -and $_.ProcessId -ne $PID -and $_.Name -match '^(hermes|python)' -and
-    ($_.CommandLine.Contains("$Eng\") -or $_.CommandLine.Contains("$Eng'")) })
+    # launched by path, or as `python -c "... '<engine>' ..."`, where Python escapes the backslashes
+    ($_.CommandLine.Contains("$Eng\") -or $_.CommandLine.Contains("$Eng'") -or $_.CommandLine.Contains($Eng.Replace('\', '\\'))) })
 }
 # A process keeps importing from the engine's path for as long as it runs, so swapping the tree
 # underneath one would mix two releases in it. The background gateway is ours to stop and restart.

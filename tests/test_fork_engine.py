@@ -56,12 +56,17 @@ class Box:
         log = self.state / "calls.log"
         return log.read_text().splitlines() if log.exists() else []
 
-    def process(self, command):
-        """A process whose line in `ps` contains `command`, well past 80 columns (Linux cuts there by default)."""
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-" * 80, command])
+    def process(self, shape, *args):
+        """A running engine process. `path`: launched by path, past the 80 columns Linux `ps` shows by default.
+        `bootstrap`: the launcher's own `python -c <several lines naming the engine> <args>`."""
+        argv = [sys.executable, "-c", "import time; time.sleep(60)", "-" * 80, f"{self.engine}/.hermes/bin/hermes", *args]
+        if shape == "bootstrap":
+            argv = [sys.executable, "-c", f"import time\nengine = '{self.engine}'\ntime.sleep(60)\n", *args]
+        proc = subprocess.Popen(argv)
         self.procs.append(proc)
         deadline = time.time() + 5
-        while command not in subprocess.run(["ps", "axww", "-o", "command="], capture_output=True, text=True).stdout:
+        while "time.sleep(60)" not in subprocess.run(["ps", "axww", "-o", "command=", "-p", str(proc.pid)],
+                                                     capture_output=True, text=True).stdout:
             assert time.time() < deadline
             time.sleep(0.05)
         return proc
@@ -126,9 +131,10 @@ def test_killed_build_is_recovered(box):
     assert (box.engine / "one").exists() and not (box.engine / "half").exists()
 
 
-def test_refuses_while_ghost_is_open(box):
+@pytest.mark.parametrize("shape", ["path", "bootstrap"])
+def test_refuses_while_ghost_is_open(box, shape):
     assert box.run(src=box.source("one")).returncode == 0
-    window = box.process(f"{box.engine}/.hermes/bin/hermes -p uncensored")
+    window = box.process(shape, "-p", "uncensored")
     for args in (["--check"], []):
         done = box.run(*args, src=box.source(f"two{len(args)}"))
         assert done.returncode != 0 and f"ghost is open (pid {window.pid})" in done.stderr
@@ -139,10 +145,11 @@ def test_refuses_while_ghost_is_open(box):
     assert box.run("--check").returncode == 0
 
 
-def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):
+@pytest.mark.parametrize("shape", ["path", "bootstrap"])
+def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box, shape):
     assert box.run(src=box.source("one")).returncode == 0
     box.service()
-    box.process(f"{box.engine}/.hermes/bin/hermes --profile uncensored gateway run")
+    box.process(shape, "--profile", "uncensored", "gateway", "run")
     assert box.run("--check").returncode == 0
     assert box.run(src=box.source("two")).returncode == 0
     assert "-p uncensored gateway stop" in box.calls() and box.restart.exists()

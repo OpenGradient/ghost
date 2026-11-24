@@ -44,19 +44,19 @@ HERMES_VERSION="" HERMES_COMMIT=""
 # Is ghost open on this engine? A process keeps importing from the engine's path for as long as it
 # runs, so swapping the tree underneath one would mix two releases in it. The background gateway
 # doesn't count: it is ours to stop and start again.
+engine_processes() {   # "pid command" of each, whether launched by path or as `python -c "... '<engine>' ..."`
+  ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" 'index($0, e "/") || index($0, e "\047")'
+}
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
   local pids
-  pids="$(ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" \
-    '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
+  pids="$(engine_processes | awk '!/gateway run/ { print $1 }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2
   return 1
 }
 service_installed() { [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; }
-gateway_running() {
-  ps axww -o command= 2>/dev/null | awk -v e="$ENG" 'index($0, e "/") && /gateway run/ { f = 1 } END { exit !f }'
-}
+gateway_running() { [ -n "$(engine_processes | awk '/gateway run/')" ]; }
 
 case "${1:-}" in
   --check) check_closed; exit ;;
