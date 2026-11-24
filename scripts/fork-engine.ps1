@@ -126,7 +126,8 @@ if (Test-Path $Old) { Remove-Item -Recurse -Force $Old }
 $oldBin = Launcher
 if (-not $oldBin -and (Test-Path "$Eng\venv\Scripts\hermes.exe")) { $oldBin = "$Eng\venv\Scripts\hermes.exe" }
 if ($oldBin) {
-  if ((Get-GatewayTask) -and (Get-EngineProcess | Where-Object { $_.CommandLine -match 'gateway run' })) {
+  $task = Get-GatewayTask
+  if ($task -and ($task.State -eq 'Running' -or (Get-EngineProcess | Where-Object { $_.CommandLine -match 'gateway run' }))) {
     New-Item -ItemType File -Force -Path $Restart | Out-Null
   }
   $env:HERMES_HOME = $GhostHome

@@ -27,10 +27,14 @@ REPO_URL="https://github.com/NousResearch/hermes-agent.git"
 NEW="$ENG.new"; OLD="$ENG.old"
 LAUNCH="$ENG/.hermes/bin/hermes"
 RESTART="$GHOST_HOME/.restart-gateway"   # present while a gateway this script stopped is owed a start
+# The background gateway, when it's installed as a service.
 case "$(uname -s)" in
-  Darwin) UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist" ;;
-  *)      UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service" ;;
+  Darwin) UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
+          service_running() { case "$(launchctl list ai.hermes.gateway-uncensored 2>/dev/null)" in *'"PID" = '*) ;; *) false ;; esac; } ;;
+  *)      UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
+          service_running() { systemctl --user is-active --quiet hermes-gateway-uncensored.service 2>/dev/null; } ;;
 esac
+service_installed() { [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; }
 
 # The engine's package manager must see only its own toolchain: install.sh exports
 # UV_PROJECT_ENVIRONMENT for ghost's privacy venv, and uv would happily sync the engine into it.
@@ -44,19 +48,15 @@ HERMES_VERSION="" HERMES_COMMIT=""
 # Is ghost open on this engine? A process keeps importing from the engine's path for as long as it
 # runs, so swapping the tree underneath one would mix two releases in it. The background gateway
 # doesn't count: it is ours to stop and start again.
-engine_processes() {   # "pid command" of each, whether launched by path or as `python -c "... '<engine>' ..."`
-  ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" 'index($0, e "/") || index($0, e "\047")'
-}
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
-  local pids
-  pids="$(engine_processes | awk '!/gateway run/ { print $1 }')"
+  local pids   # launched by path, or as `python -c "... '<engine>' ..."`
+  pids="$(ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" \
+    '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2
   return 1
 }
-service_installed() { [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; }
-gateway_running() { [ -n "$(engine_processes | awk '/gateway run/')" ]; }
 
 case "${1:-}" in
   --check) check_closed; exit ;;
@@ -132,7 +132,7 @@ rm -rf "$OLD"
 OLD_BIN=""
 for bin in "$LAUNCH" "$ENG/venv/bin/hermes"; do [ -x "$bin" ] && { OLD_BIN="$bin"; break; }; done
 old_engine() { HERMES_HOME="$GHOST_HOME" "$OLD_BIN" -p uncensored "$@" </dev/null >/dev/null 2>&1 || true; }
-if service_installed && gateway_running; then : > "$RESTART"; fi
+if service_installed && service_running; then : > "$RESTART"; fi
 [ -z "$OLD_BIN" ] || old_engine gateway stop
 
 rollback() {
