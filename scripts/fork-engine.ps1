@@ -52,7 +52,7 @@ function Invoke-Quietly([scriptblock]$Block) {
 }
 function Test-Launches {
   if (-not (Launcher)) { return $false }
-  return "$(Invoke-Quietly { Invoke-Engine @('--version') } | Select-Object -First 1)".StartsWith("Ghost v")
+  return "$(@(Invoke-Quietly { Invoke-Engine @('--version') })[0])".StartsWith("Ghost v")
 }
 function Get-EngineProcess {
   @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
@@ -170,7 +170,7 @@ sys.exit(0 if ensure_install_launchers(root, root / ".hermes" / "bin") else "cou
   if ($code -ne 0 -or -not (Launcher)) { throw "could not write the engine launcher" }
 
   Write-Host "==> verifying the engine launches"
-  $first = (Invoke-Engine @("--version") | Select-Object -First 1)
+  $first = @(Invoke-Engine @("--version"))[0]   # collected whole: Select-Object -First would cut the process off
   Write-Host "    $first"
   if (-not "$first".StartsWith("Ghost v$Version")) { throw "expected 'Ghost v$Version'" }
 } catch {
@@ -190,3 +190,4 @@ sys.exit(0 if ensure_install_launchers(root, root / ".hermes" / "bin") else "cou
 
 if (Test-Path $Old) { Remove-Item -Recurse -Force $Old -ErrorAction SilentlyContinue }
 Write-Host "==> engine ready: $Eng"
+exit 0
