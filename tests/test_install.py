@@ -101,7 +101,7 @@ def test_fresh_install(machine, system):
     m = machine(system)
     done = m.install()
     assert done.returncode == 0, done.stdout + done.stderr
-    for step in ("Checking this machine", "Installing the privacy bridge", "Building the engine (Hermes ", "Writing your profile",
+    for step in ("Checking this machine", "Installing the privacy bridge", "Setting up the engine (Hermes ", "Writing your profile",
                  "Starting the background service", "Installing the ghost command"):
         assert f"✓ {step}" in done.stdout
     assert "It asks you to log in the first time" in done.stdout and "compiling the engine" not in done.stdout
@@ -212,7 +212,7 @@ def test_a_failure_says_which_step_and_why(machine, verbose):
     m = machine()
     (m.home / "engine-broken").touch()
     done = m.install(GHOST_VERBOSE=verbose)
-    assert done.returncode == 3 and "✗ Building the engine" in done.stdout and "the reason it broke" in done.stdout
+    assert done.returncode == 3 and "✗ Setting up the engine" in done.stdout and "the reason it broke" in done.stdout
     assert "Writing your profile" not in done.stdout and not (m.commands / "ghost").exists()
     if not verbose:
         assert f"The whole log is in {m.ghost}/install.log" in done.stdout
