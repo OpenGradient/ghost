@@ -154,6 +154,69 @@ def test_prefill_reaches_the_model(engine):
     assert out.endswith("/.ghost/privacy/uncensored_prefill.json")
 
 
+def test_no_vendor_key_of_yours_is_used(engine):
+    """What the engine would act on if it found it in the environment, `ghost` takes out of it first."""
+    known = engine("""
+from hermes_cli.auth import PROVIDER_REGISTRY
+from hermes_cli.config import OPTIONAL_ENV_VARS
+names = {v for p in PROVIDER_REGISTRY.values() for v in (*p.api_key_env_vars, p.base_url_env_var) if v}
+out = sorted(names | {n for n, m in OPTIONAL_ENV_VARS.items() if m.get("category") in ("provider", "tool")})
+""")
+    sys.path.insert(0, str(REPO / "privacy"))
+    import launch
+    # the agent's own git and claude; which AWS account; and nothing else
+    spared = {"GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_PROFILE", "AWS_REGION"}
+    assert not set(known) - launch.VENDOR_ENV - spared
+
+
+def test_the_engine_without_settings_has_no_provider(engine, tmp_path):
+    """Pinned in its environment too, so a damaged config.yaml leads nowhere rather than to a vendor."""
+    out = engine("""
+import os
+os.environ["HERMES_INFERENCE_PROVIDER"] = "opengradient"
+from hermes_cli import runtime_provider, config
+config.load_config = lambda *a, **k: {}
+try:
+    out = runtime_provider.resolve_runtime_provider().get("base_url")
+except Exception as e:
+    out = "refused"
+""")
+    assert out in ("refused", None, "") or "127.0.0.1" in out
+
+
+def test_a_side_task_stays_on_its_own_model(engine):
+    assert engine("from agent.auxiliary_client import _try_main_agent_model_fallback as f\nout = list(f('opengradient', task='title_generation'))") == [None, None, ""]
+
+
+def test_searches_ask_one_engine_at_a_time(engine):
+    asked = engine("""
+import sys, types
+asked = []
+class DDGS:
+    def __init__(self, timeout=None): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def text(self, query, max_results=None, backend=None):
+        asked.append(backend)
+        if backend == "brave": raise RuntimeError("blocked")
+        return [{"title": "t", "href": "https://x", "body": "b"}] if backend == "startpage" else []
+sys.modules["ddgs"] = types.SimpleNamespace(DDGS=DDGS)
+from plugins.web.ddgs.provider import _run_ddgs_search
+out = [asked, len(_run_ddgs_search("q", 5))]
+""")
+    assert asked == [["duckduckgo", "brave", "startpage"], 1]
+
+
+@pytest.mark.parametrize("command, rule", [
+    ("python3 -c 'print(1)'", "script execution via -e/-c flag"), ("python3 -c 'print(1)'; chmod 777 notes.txt", "world/other-writable permissions"),
+    ("rm -r build", "recursive delete"), ("ls", None),
+])
+def test_what_is_not_routine_about_a_command_decides(engine, profile, command, rule):
+    found = engine(f"from tools.approval_detection import detect_dangerous_command as d\nout = d({command!r})[1]")
+    assert found == rule
+    assert (rule in profile["command_allowlist"]) == (rule == "script execution via -e/-c flag")
+
+
 def test_long_chats_are_summarized_before_they_get_expensive(engine):
     """No prompt cache on the gateway: at $3/M a 500K-token chat would cost $1.50 a step."""
     out = engine("from run_agent import AIAgent\nfrom hermes_cli.runtime_provider import resolve_runtime_provider\n"
@@ -167,7 +230,8 @@ def test_long_chats_are_summarized_before_they_get_expensive(engine):
 def test_every_route_is_served_by_the_bridge(profile):
     bridge = (REPO / "privacy" / "bridge.py").read_text(encoding="utf-8")
     served = set(re.findall(r'(?m)^    \("([\w./-]+)", "', bridge.split("_CATALOG_MODELS = [", 1)[1].split("\n]", 1)[0]))
-    routes = [profile["model"]["default"], profile["fallback_model"]["model"]]
+    routes = [profile["model"]["default"]]
+    assert not profile.get("fallback_model") and not profile.get("fallback_providers")   # falling back is answering again, at your expense
     routes += [route["model"] for route in profile["auxiliary"].values()]
     assert served and set(routes) - served == set()
 

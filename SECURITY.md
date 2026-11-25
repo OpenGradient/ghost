@@ -24,6 +24,7 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
   and opengradient-ohttp.
 - **A login leaking** -- your session or API key readable by another user, logged, or sent anywhere
   but DreamFort.
+- **Someone else on this machine using your bridge**, or standing in for it.
 - **A response accepted without verification** (the verify-before-emit guarantee bypassed).
 - **The engine phoning home** -- an update check, telemetry, a remote catalog or plugin fetch, or a
   side task that leaves the private path.

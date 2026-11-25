@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """What ghost has spent on hosted models, and the limit that stops a runaway.
 
-The bridge records the cost the enclave reports with every reply (model and token counts only, never
-content) and refuses new requests once the last hour's total passes the budget.
+The bridge records what DreamFort charges for every reply (with the model and token counts, never content) and refuses new requests once the last hour's total passes the budget.
 
     ghost usage            what you've spent
     ghost budget           show the hourly limit
@@ -23,7 +22,9 @@ DEFAULT_BUDGET = 5.0
 HOUR, DAY = 3600, 86400
 KEEP = 31 * DAY
 
-# Dollars per million tokens (in, out), for replies whose own cost never arrived because they broke off.
+# What DreamFort charges, as a multiple of the cost the enclave reports (chat-api's OHTTP_CREDIT_MARKUP).
+MARKUP = 1.35
+# The enclave's cost per million tokens (in, out), for replies whose own never arrived because they broke off.
 PRICES = {
     "abliterated-model-large-v2": (3.0, 5.0),
     "deepseek-v4-pro": (1.32, 3.96),
@@ -53,7 +54,7 @@ def _load(since):
 
 def estimate(model, tokens_in, tokens_out):
     price_in, price_out = PRICES.get(model, (3.0, 5.0))
-    return (tokens_in * price_in + tokens_out * price_out) / 1e6
+    return (tokens_in * price_in + tokens_out * price_out) / 1e6 * MARKUP
 
 
 def record(model, tokens_in, tokens_out, usd):

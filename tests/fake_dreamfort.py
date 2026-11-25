@@ -36,7 +36,8 @@ FAILURES = {
     "402": (402, {"detail": "Insufficient credits"}), "429": (429, {"error": "Rate limit exceeded: 40 per 1 minute"}),
     "503": (503, {"detail": {"code": "tee_unreachable", "message": "TEE OHTTP request failed"}}),
     "retired": (502, {"detail": {"code": "tee_not_active", "message": "Selected TEE is not active"}}),
-    "page": (502, b"<html><h1>502 Bad Gateway</h1></html>"), "451": (451, {"error": "Content policy violation"}),
+    "page": (502, b"<html><h1>502 Bad Gateway</h1></html>"), "portal": (200, b"<html>Welcome to the hotel</html>"),
+    "slow": (504, {"detail": {"code": "tee_timeout", "message": "no answer from the enclave"}}), "451": (451, {"error": "Content policy violation"}),
     # accepted, and then not delivered
     "504": (504, b"<html><h1>504 Gateway Time-out</h1></html>"), "silent": None, "empty": None, "cut": None, "drop": None,
     "forged": None, "unsigned": None,

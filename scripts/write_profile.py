@@ -9,19 +9,23 @@ when it differs.
 import argparse
 import os
 import re
+import sys
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent.parent / "profile"
 SIDE_TASKS = "abliteration/deepseek-v4.1-flash-abliterated"
-FALLBACK = "nous/hermes-4-405b"
 
 
 def config(ghost_home, local_model=None):
+    os.environ["GHOST_HOME"] = str(ghost_home)
+    sys.path.insert(0, str(SOURCE.parent / "privacy"))
+    import ghost_auth
     text = (SOURCE / "config.yaml").read_text(encoding="utf-8")
     text = text.replace("__GHOST_HOME__", Path(ghost_home).as_posix()).replace("__LOCAL_MODEL__", local_model or "ghost-tool:latest")
-    if not local_model:   # hosted-only: nothing is served locally, so side tasks and the fallback are hosted too
+    text = text.replace("__BRIDGE_TOKEN__", ghost_auth.bridge_token())
+    if not local_model:   # hosted-only: nothing is served locally, so side tasks are hosted too, and there is no fallback
+        text = re.sub(r"(?m)^(# Only with GHOST_LOCAL.*\n(?:#.*\n)*)?fallback_model:\n(?:  .*\n)+", "", text)
         text = re.sub(r"provider: ollama-local\n(\s*)model: \S+", rf"provider: opengradient\n\1model: {SIDE_TASKS}", text)
-        text = re.sub(r"(?m)^(fallback_model:\n  provider: opengradient\n  model: )\S+", rf"\g<1>{FALLBACK}", text)
         text = re.sub(r"(?m)^  ollama-local:\n(?:    .*\n)+", "", text)   # or /model would offer it
     return text
 

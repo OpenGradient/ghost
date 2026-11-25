@@ -9,16 +9,18 @@ model:
   default: abliteration/abliterated-model-large-v2
   provider: opengradient
   context_length: 1048576
+# Only with GHOST_LOCAL, for when the hosted models can't be reached. There is no hosted fallback: falling back is
+# answering again, at your expense, and by a model whose smaller window a long chat would be cut down to.
 fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
 providers:
   # Hosted models are reached through ghost's local bridge (privacy/bridge.py on :8788), which seals each
-  # request to an attested TEE enclave (OHTTP) and verifies the reply. The api_key here is a placeholder: the
-  # bridge uses your own login (`ghost login`).
+  # request to an attested TEE enclave (OHTTP) and verifies the reply. The api_key is what the bridge knows its own
+  # ghost by; DreamFort gets your own login (`ghost login`).
   opengradient:
     base_url: http://127.0.0.1:8788/v1
-    api_key: managed-by-ghost
+    api_key: __BRIDGE_TOKEN__
     default_model: abliteration/abliterated-model-large-v2
     context_length: 1048576
     models:   # smaller windows than the 1M above
@@ -38,6 +40,8 @@ agent:
   # The relay bills every attempt it accepts. The bridge already retries what it safely can.
   api_max_retries: 2
   auto_recovery_cycles: 1
+  # The bridge hands a reply over whole, so a long one is a long silence. Asking again would only pay again.
+  local_stream_stale_timeout: 3600
   service_tier: fast
   task_completion_guidance: false
   environment_probe: false
@@ -168,13 +172,17 @@ prefill_messages_file: __GHOST_HOME__/privacy/uncensored_prefill.json
 compression:
   threshold_tokens: 160000
   proactive_prune_tokens: 48000
+  abort_on_summary_failure: true   # (a chat is never shortened by just dropping its middle)
 memory:
   memory_enabled: false
   user_profile_enabled: false
-# Incognito: conversations are pruned a day after they end.
+# Incognito: conversations are deleted a day after they end (and so is what you typed, by the launcher), and the logs
+# don't quote them.
 sessions:
   auto_prune: true
   retention_days: 1
+logging:
+  level: WARNING
 display:
   personality: uncensored
   interface: cli
@@ -187,12 +195,12 @@ security:
   redact_secrets: false
 approvals:
   mode: manual
+# What an agent does all day isn't asked about; deleting folders and the like is. (A command that does both is:
+# scripts/debrand.py.)
 command_allowlist:
 - script execution via heredoc
 - script execution via -e/-c flag
 - shell command via -c/-lc flag
-- recursive delete
-- delete in root path
 terminal:
   home_mode: real
 checkpoints:
@@ -204,10 +212,11 @@ tool_loop_guardrails:
     exact_failure: 3
     same_tool_failure: 5
     idempotent_no_progress: 3
+# Searches go from this machine to public search engines, one at a time until one answers: DuckDuckGo, Brave,
+# Startpage, Mojeek, Yahoo, Google (scripts/debrand.py).
 web:
   backend: ddgs
   search_backend: ddgs
-  # Searches go to the engine chosen above and nowhere else.
   keyless_fallback: false
   keyless_rescue: false
 tts:
@@ -278,5 +287,5 @@ _config_version: 54
 # ── Fallback model ────────────────────────────────────────────────────
 # Every hosted request takes one path: the local bridge, then the TEE gateway. There is deliberately no
 # other provider here (no Nous Portal, OpenRouter, Claude, GPT or Gemini): that would bypass the enclave and
-# the unrestricted-only line-up. The fallback at the top of this file is a hosted unrestricted model, or a
-# local one when ghost was installed with GHOST_LOCAL=1.
+# the unrestricted-only line-up. The fallback at the top of this file is the local model, when ghost was
+# installed with GHOST_LOCAL=1.

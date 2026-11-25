@@ -1,9 +1,10 @@
 """Which enclaves a request may be sealed to: the ones the on-chain TEE registry lists.
 
 The chain it lives on has been down (25 November 2026), and a network that inspects TLS can't be believed about
-it. When it can't be read, ghost uses the enclaves below instead. Their keys are fixed here, as the registry's
-address is, so cutting ghost off from the registry can't point it at an impostor. DreamFort's apps fall back to
-the same list (chat-app's lib/api/backupTees.ts, chat-api's src/core/backup_tees.py): keep the three in step.
+it. When it can't be read, ghost uses the enclaves below instead; a registry that answers is always obeyed, also
+when it lists none. Their keys are fixed here, as the registry's address is, so cutting ghost off from the registry
+can't point it at an impostor. DreamFort's apps fall back to the same list (chat-app's lib/api/backupTees.ts,
+chat-api's src/core/backup_tees.py): keep the three in step.
 """
 import random
 
@@ -43,17 +44,18 @@ class Enclaves(TeeResolver):
         self._log = log
 
     def get(self):
-        try:
-            return super().get()
-        except RegistryError as e:
-            self._log(f"the TEE registry can't be read, using a built-in enclave: {e}")
-            with self._lock:
-                self._cache.put(random.choice(BUILT_IN))
-                return self._cache.get()
+        with self._lock:
+            if not self._cache.get():
+                try:
+                    found = self.listed()
+                except RegistryError as e:
+                    self._log(f"the TEE registry can't be read, using a built-in enclave: {e}")
+                    found = BUILT_IN
+                if not found:
+                    raise RegistryError("the TEE registry lists no active enclave, so there is nothing to seal this to; try again later")
+                self._cache.put(random.choice(found))
+            return self._cache.get()
 
     def listed(self):
-        """How many enclaves the registry lists. Raises RegistryError when it can't be read."""
-        found = len(parse_active_tees(self._fetch(), self._excluded))
-        if not found:
-            raise RegistryError("the registry lists no enclave")
-        return found
+        """The enclaves the registry lists. Raises RegistryError when it can't be read."""
+        return parse_active_tees(self._fetch(), self._excluded)

@@ -33,13 +33,31 @@ PROFILE = HOME / "profiles" / "uncensored"
 PORT = 8788
 SERVICE = "ai.dreamfort.ghost" if platform.system() == "Darwin" else "ghost-bridge"
 
+# Vendors the engine would turn to if it found their key (or address) in your environment: a model in its picker, a
+# search, a picture, a browser, unsealed and on your own bill. Put one in ghost's own .env if that's what you want.
+# tests/test_engine.py fails when an engine release knows one that isn't here.
+VENDORS = """
+ACTUAL AI_GATEWAY ALIBABA_CODING_PLAN ALIBABA_CODING_PLAN_CN ALIBABA_TOKEN_PLAN ALIBABA_TOKEN_PLAN_CN ANTHROPIC ARCEE ARCEEAI AZURE_FOUNDRY BEDROCK
+COHERE COMMANDCODE COMMANDCODE_ANTHROPIC DASHSCOPE DASHSCOPE_CN DEEPINFRA DEEPSEEK FIREWORKS GEMINI GLM GMI GOOGLE GROQ HELICONE HF KILOCODE KIMI
+KIMI_CN KIMI_CODING LM META META_MODEL MINIMAX MINIMAX_CN MISTRAL MODEL NEBIUS NEBIUS_TOKEN_FACTORY NOUS NOVITA NVIDIA OLLAMA OPENAI OPENCODE_GO
+OPENCODE_ZEN OPENROUTER PERPLEXITY QWEN RAMP_ROUTER ROUTER STEPFUN TOGETHER TOKENHUB TOKENPLAN UPSTAGE XAI XIAOMI ZAI Z_AI
+BRAVE_SEARCH BROWSERBASE BROWSER_USE BRV CONNECTOR_GATEWAY ELEVENLABS EXA FIRECRAWL HINDSIGHT HONCHO KEENABLE KREA MEM0 OPENVIKING PARALLEL
+RETAINDB SUPERMEMORY TAVILY
+""".split()
+VENDOR_ENV = {f"{vendor}_{what}" for vendor in VENDORS for what in ("API_KEY", "BASE_URL", "API_BASE", "API_URL", "TOKEN", "URL")} | {
+    "AWS_BEARER_TOKEN_BEDROCK", "BROWSERBASE_PROJECT_ID", "FAL_KEY", "FIRECRAWL_BROWSER_TTL", "FIRECRAWL_GATEWAY_URL", "GOOGLE_APPLICATION_CREDENTIALS",
+    "HERMES_ANON_API_SECRET", "HERMES_INFERENCE_MODEL", "HERMES_INFERENCE_PROVIDER", "HERMES_MODEL", "HERMES_QWEN_BASE_URL", "HERMES_TUI_PROVIDER",
+    "LLM_MODEL", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENVIKING_ENDPOINT", "PORCUPINE_ACCESS_KEY", "SEARXNG_URL", "TOOL_GATEWAY_DOMAIN",
+    "TOOL_GATEWAY_SCHEME", "TOOL_GATEWAY_URL", "TOOL_GATEWAY_USER_TOKEN", "VERTEX_CREDENTIALS_PATH", "VOICE_TOOLS_OPENAI_KEY"}
+LOCAL_TOOLS = "clarify,code_execution,file,session_search,skills,terminal,todo"   # none that reach the web by themselves
+
 HELP = """\
 ghost -- a private, unrestricted agent in your terminal
 
   ghost                     start chatting
   ghost -z "question"       ask once and print the answer
   ghost -c                  continue your last chat (ghost --resume ID for another)
-  ghost --local             use the offline model (nothing leaves this machine)
+  ghost --local             use the offline model (what you type stays on this machine)
 
   ghost login | logout      connect your DreamFort account or API key
   ghost doctor              check that everything works
@@ -72,7 +90,7 @@ def _setting(config, section, key, indent=2):
 
 def default_model(config):
     model = _setting(config, "model", "default")
-    return model.rsplit("/", 1)[-1] if model else "ghost"
+    return model.rsplit("/", 1)[-1] if model else None
 
 
 def local_model(config):
@@ -104,6 +122,23 @@ def pin_route():
         walk(data)
     if changed:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def forget_typed(config):
+    """Chats are deleted a day after they end (sessions.retention_days); so is the list of what you typed."""
+    if _setting(config, "sessions", "auto_prune") != "true":
+        return
+    path, keep = PROFILE / ".hermes_history", []
+    try:
+        oldest = time.time() - float(_setting(config, "sessions", "retention_days") or 1) * 86400
+        entries = re.split(r"(?m)^(?=# \d{4}-\d\d-\d\d )", path.read_text(encoding="utf-8"))
+        for entry in entries[1:]:
+            if time.mktime(time.strptime(entry[2:21], "%Y-%m-%d %H:%M:%S")) >= oldest:
+                keep.append(entry)
+        if len(keep) < len(entries) - 1:
+            path.write_text("\n" + "".join(keep), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
 
 
 # ── the bridge ────────────────────────────────────────────────────────────────
@@ -161,6 +196,13 @@ def _start_process():
                          stdout=out, stderr=out, cwd=str(HOME), **extra)
 
 
+def leave_proxies():
+    """The bridge is a background service, and doesn't see the proxies your shell sets."""
+    if urllib.request.getproxies_environment() or (PRIV / "proxies.json").exists():
+        import outbound   # (not for nothing: it brings an HTTP client along)
+        outbound.note()
+
+
 def ensure_bridge():
     """It runs as a background service; start it if something stopped it."""
     if bridge_up():
@@ -202,13 +244,15 @@ def engine_proxies():
     return {name: value for lower, value in env.items() for name in (lower, lower.upper())}
 
 
-def run_engine(args):
+def run_engine(args, provider="opengradient"):
     engine = engine_binary()
     if engine is None:
         say(f"the engine isn't installed ({ENGINE}). Put it back with: ghost update")
         return 1
-    # An ambient ANTHROPIC_API_KEY would make any `claude` the agent runs bill that key instead of your plan.
-    os.environ.pop("ANTHROPIC_API_KEY", None)
+    for name in VENDOR_ENV:
+        os.environ.pop(name, None)
+    os.environ["HERMES_INFERENCE_PROVIDER"] = provider   # whatever becomes of config.yaml
+    os.environ.update({"UV_SYSTEM_CERTS": "1", "UV_NATIVE_TLS": "1"})   # for what it installs later on
     os.environ.update(engine_proxies())
     command = [str(engine), "-p", "uncensored", *args]
     sys.stdout.flush()
@@ -229,8 +273,10 @@ def run_local(args, config):
         say(f"no local model installed ({model}). Reinstall with GHOST_LOCAL=1 to add the offline model.")
         return 1
     if sys.stderr.isatty():
-        say(f"{model} · fully offline, nothing leaves this machine")
-    return run_engine(["-m", model, "--provider", "ollama-local", *args])
+        say(f"{model} · runs on this machine, and its web tools are off")
+    if starts_a_chat(args) and not {"-t", "--toolsets"} & set(args):
+        args = ["--toolsets", LOCAL_TOOLS, *args]
+    return run_engine(["-m", model, "--provider", "ollama-local", *args], provider="ollama-local")
 
 
 def starts_a_chat(args):
@@ -288,6 +334,10 @@ def main(argv):
         return run_local(args, config)
     if not starts_a_chat(args):
         return run_engine(args)
+    if not default_model(config) or "\n  opengradient:\n" not in config:
+        say(f"ghost's settings ({PROFILE / 'config.yaml'}) are missing or damaged. Put them back with: ghost update")
+        return 1
+    forget_typed(config)
     if ghost_auth.mode() is None:
         stop = log_in_first(config)
         if stop == "local":
@@ -295,6 +345,7 @@ def main(argv):
         if stop is not None:
             return stop
     pin_route()
+    leave_proxies()
     if not ensure_bridge():
         if port_taken():   # whoever it is, they'd be sent your prompts
             say(f"{bridge_problem()}. Close it, then start ghost again.")

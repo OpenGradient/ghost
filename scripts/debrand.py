@@ -198,6 +198,36 @@ CODE_PATCHES = [
      r'if _redact_raw\.lower\(\) not in \{"1", "true", "yes", "on"\}:',
      "if False:  @NOTE",
      "off on purpose"),
+    # -- side tasks: one that fails may not be tried again on the main model. With `ghost --local` that would be a
+    # hosted one (nothing of yours was to leave the machine), and otherwise it is a ten times dearer one.
+    ("agent/auxiliary_client.py",
+     r"(def _try_main_agent_model_fallback\((?:.|\n)+?\) -> tuple\[Optional\[Any\], Optional\[str\], str\]:\n)",
+     r'\1    return None, None, ""  @NOTE' "\n",
+     "a side task stays on its own model"),
+    # -- web search: `auto` asks Wikipedia and xAI's Grokipedia first, and then a random few at once.
+    ("plugins/web/ddgs/provider.py",
+     r"    with DDGS\(timeout=10\) as client:\n        for i, hit in enumerate\(client\.text\(query, max_results=safe_limit\)\):\n",
+     "    with DDGS(timeout=10) as client:\n"
+     "        found, failed = [], None\n"
+     '        for engine in ("duckduckgo", "brave", "startpage", "mojeek", "yahoo", "google"):  @NOTE\n'
+     "            try:\n"
+     "                found = list(client.text(query, max_results=safe_limit, backend=engine))\n"
+     "            except Exception as e:\n"
+     "                failed = e\n"
+     "            if found:\n"
+     "                break\n"
+     "        if not found and failed:\n"
+     "            raise failed\n"
+     "        for i, hit in enumerate(found):\n",
+     "one search engine at a time"),
+    # -- approvals: a command is judged by the first rule it matches, so one that is always allowed
+    # (`python -c ...`) would carry anything chained after it.
+    ("tools/approval_detection.py",
+     r"            description = next\(_iter_dangerous_descriptions\(command\), None\)\n",
+     "            _found = list(dict.fromkeys(_iter_dangerous_descriptions(command)))  @NOTE\n"
+     '            _routine = ("script execution via heredoc", "script execution via -e/-c flag", "shell command via -c/-lc flag")\n'
+     "            description = next((d for d in _found if d not in _routine), _found[0] if _found else None)\n",
+     "what isn't routine about a command decides"),
     # -- startup tips: skip the ones that point at accounts and closed models ghost doesn't have.
     ("hermes_cli/tips.py",
      r"    keys = tip_keys\(\)\n",

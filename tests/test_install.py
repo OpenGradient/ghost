@@ -102,7 +102,7 @@ def machine(tmp_path):
             if not key.exists():
                 key.write_text("k")
             self.send_response(200)
-            self.send_header("X-Ghost-Proof", hmac.new(key.read_bytes(), self.path.partition("?")[2].encode(), "sha256").hexdigest())
+            self.send_header("X-Ghost-Proof", hmac.new(key.read_bytes(), b"proof " + self.path.partition("?")[2].encode(), "sha256").hexdigest())
             self.end_headers()
 
         def log_message(self, *args):
@@ -130,7 +130,7 @@ def test_fresh_install(machine, system):
         assert os.access(m.commands / name, os.X_OK) and not re.search("__[A-Z]", (m.commands / name).read_text())
     assert (m.ghost / ".src").read_text() == f"{m.repo}\n" and (m.ghost / ".install-env").read_text() == ""
     config = (m.profile / "config.yaml").read_text()
-    assert "ollama-local" not in config and "__" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config
+    assert "ollama-local" not in config and "fallback_model:" not in config and not re.search("__[A-Z]", config) and f"{m.ghost}/privacy/uncensored_prefill.json" in config
     assert (m.profile / ".env").exists() and (m.ghost / "privacy" / "uncensored_prefill.json").exists()
 
 

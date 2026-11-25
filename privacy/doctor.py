@@ -5,8 +5,8 @@ import time
 
 import ghost_auth
 import launch
+import outbound
 import spend
-from ghost_auth import AuthError
 
 
 def engine():
@@ -28,38 +28,52 @@ def login():
 
 
 def bridge():
+    outbound.note()
     if launch.ensure_bridge():
         return True, f"running on 127.0.0.1:{launch.PORT}", None
     return False, f"isn't running: {launch.bridge_problem()}", None if launch.port_taken() else "ghost update"
 
 
+def _asked():
+    """What the bridge can reach (it, and not this shell, is what your requests go through)."""
+    import http.client
+    import json
+    conn = http.client.HTTPConnection("127.0.0.1", launch.PORT, timeout=45)
+    try:
+        conn.request("GET", "/check", headers={"Authorization": f"Bearer {ghost_auth.bridge_token()}"})
+        return json.loads(conn.getresponse().read())
+    except (OSError, ValueError, http.client.HTTPException):
+        return {}
+    finally:
+        conn.close()
+
+
+_found = {}
+
+
 def relay():
     """The relay's own config document: it answers only a login it accepts, and nothing is run or billed."""
-    import httpx
-    import outbound
     started = time.monotonic()
-    try:
-        address, token = ghost_auth.credentials()
-        resp = httpx.get(f"{address}/config", headers={"Authorization": f"Bearer {token}"}, timeout=20, verify=outbound.trust())
-    except AuthError as e:
-        return False, str(e), "ghost login"
-    except httpx.HTTPError as e:
-        return False, f"can't be reached ({type(e).__name__}); check your connection, VPN or proxy", None
-    if resp.status_code in (401, 403):
+    _found.clear()
+    _found.update(_asked())
+    if "login" in _found:
+        return False, _found["login"], "ghost login"
+    if "unreachable" in _found:
+        return False, f"can't be reached ({_found['unreachable']}); check your connection, VPN or proxy", None
+    status = _found.get("relay")
+    if status in (401, 403):
         return False, "doesn't accept this login any more", "ghost login"
-    if resp.status_code != 200:
-        return False, f"isn't well ({resp.status_code}); try again in a moment", None
+    if status != 200:
+        return False, f"isn't well ({status or 'the bridge has no answer'}); try again in a moment", None
     return True, f"reachable, login accepted ({(time.monotonic() - started) * 1000:.0f} ms)", None
 
 
 def enclaves():
     """The registry says which enclaves there are. Without it, ghost has some built in."""
-    import outbound
-    from enclaves import REGISTRY, Enclaves, RegistryError
-    try:
-        return True, f"{Enclaves(outbound.transport(REGISTRY, public_only=True)).listed()} in the registry", None
-    except RegistryError:
+    listed = _found.get("enclaves")
+    if listed is None:
         return None, "the registry can't be read right now, so the one built into ghost is used", None
+    return (True, f"{listed} in the registry", None) if listed else (False, "the registry lists none right now; try again later", None)
 
 
 def credits():
