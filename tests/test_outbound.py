@@ -1,4 +1,5 @@
 """Company networks: the system's proxy and certificates, and the one read that trusts neither."""
+import os
 import socket
 import ssl
 import sys
@@ -19,6 +20,7 @@ PROXY_VARIABLES = [v for name in ("http", "https", "all", "no") for v in (f"{nam
 def no_proxy_of_this_machine(monkeypatch):
     for name in PROXY_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(outbound, "NOTE", Path(os.devnull) / "none")
     monkeypatch.setattr(outbound.urllib.request, "getproxies", outbound.urllib.request.getproxies_environment)
     monkeypatch.setattr(outbound.urllib.request, "proxy_bypass", outbound.urllib.request.proxy_bypass_environment)
 
@@ -30,12 +32,56 @@ def no_proxy_of_this_machine(monkeypatch):
     ({"ALL_PROXY": "http://proxy.corp:8080"}, "https://chat-api.example/x", "http://proxy.corp:8080"),
     ({"HTTP_PROXY": "http://proxy.corp:8080"}, "https://chat-api.example/x", None),
     ({"HTTPS_PROXY": "http://proxy.corp:8080", "NO_PROXY": ".example"}, "https://chat-api.example/x", None),
-    ({"HTTPS_PROXY": "socks5://proxy.corp:1080"}, "https://chat-api.example/x", None),
+    ({"ALL_PROXY": "socks5://127.0.0.1:9050"}, "https://chat-api.example/x", "socks5://127.0.0.1:9050"),   # Tor, say
 ])
 def test_which_proxy(monkeypatch, env, url, expect):
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     assert outbound.proxy(url) == expect
+
+
+def test_a_proxy_that_cannot_be_used_is_not_gone_around(monkeypatch):
+    """That would show your address to whoever you were hiding it from."""
+    monkeypatch.setenv("ALL_PROXY", "socks4://me:secret@127.0.0.1:9050")
+    with pytest.raises(httpx.ProxyError, match="can't use a proxy like 127.0.0.1:9050"):
+        outbound.transport("https://chat-api.example")
+
+
+def test_socks_is_spoken(monkeypatch):
+    pytest.importorskip("socksio")
+    listener = socket.create_server(("127.0.0.1", 0))
+    heard = []
+
+    def refuse():
+        conn, _ = listener.accept()
+        heard.append(conn.recv(3))
+        conn.sendall(b"\x05\xff")
+        conn.close()
+    threading.Thread(target=refuse, daemon=True).start()
+    monkeypatch.setenv("ALL_PROXY", f"socks5://127.0.0.1:{listener.getsockname()[1]}")
+    with httpx.Client(transport=outbound.transport("https://chat-api.example")) as client:
+        with pytest.raises(httpx.ProxyError):
+            client.get("https://chat-api.example/x")
+    assert heard[0][:1] == b"\x05"
+
+
+def test_the_bridge_is_told_what_your_shell_sets(monkeypatch, tmp_path):
+    """It's a background service: launchd and systemd don't give it your shell's variables."""
+    monkeypatch.setattr(outbound, "NOTE", tmp_path / "proxies.json")
+    monkeypatch.setenv("HTTPS_PROXY", "http://me:secret@proxy.corp:8080")
+    monkeypatch.setenv("NO_PROXY", "intranet.corp")
+    outbound.note()
+    for name in PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    assert outbound.proxy("https://chat-api.example/x") == "http://me:secret@proxy.corp:8080"
+    assert outbound.proxy("https://intranet.corp/x") is None
+    assert os.name == "nt" or (tmp_path / "proxies.json").stat().st_mode & 0o77 == 0
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    outbound.note()   # a cron job without them is no reason to forget
+    assert outbound.proxy("https://chat-api.example/x")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    outbound.note()   # but you, at home, are
+    assert outbound.proxy("https://chat-api.example/x") is None
 
 
 @pytest.mark.parametrize("public_only", [False, True])
@@ -69,13 +115,13 @@ def test_the_bridge_reads_the_registry_that_way(monkeypatch):
     import bridge
     made = {}
     monkeypatch.setattr(bridge, "_clients", {})
-    monkeypatch.setattr(bridge.ghost_auth, "credentials", lambda: ("https://relay.example/x", "t"))
+    monkeypatch.setattr(bridge.ghost_auth, "credentials", lambda refused=None: ("https://relay.example/x", "t"))
     monkeypatch.setattr(bridge.outbound, "transport", lambda url, **options: (url, options))
     sealing = httpx.MockTransport(lambda request: None)
     monkeypatch.setattr(bridge, "OHTTPTransport", lambda **options: made.update(options) or sealing)
     bridge._upstream()
     from opengradient_ohttp import DEFAULT_RPC_URL
-    assert made["transport"] == ("https://relay.example/x", {})
+    assert made["transport"].inner == ("https://relay.example/x", {})
     assert sealing._resolver._transport == (DEFAULT_RPC_URL, {"public_only": True}) and sealing._resolver._rpc_url == DEFAULT_RPC_URL
 
 

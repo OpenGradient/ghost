@@ -58,7 +58,7 @@ class Machine:
             directory.mkdir()
         for name in ("bin", "launchd", "systemd", "privacy", "profile", "scripts"):
             shutil.copytree(REPO / name, self.repo / name, ignore=shutil.ignore_patterns("__pycache__"))
-        for name in ("install.sh", "engine.pin", "models.txt"):
+        for name in ("install.sh", "engine.pin", "models.txt", "uv.lock"):
             shutil.copy(REPO / name, self.repo / name)
         (self.repo / "scripts" / "fork-engine.sh").write_text(FORK_ENGINE)
         launch = self.repo / "privacy" / "launch.py"
@@ -102,7 +102,7 @@ def machine(tmp_path):
             if not key.exists():
                 key.write_text("k")
             self.send_response(200)
-            self.send_header("X-Ghost-Proof", hmac.new(key.read_bytes(), self.path.partition("?")[2].encode(), "sha256").hexdigest())
+            self.send_header("X-Ghost-Proof", hmac.new(key.read_bytes(), b"proof " + self.path.partition("?")[2].encode(), "sha256").hexdigest())
             self.end_headers()
 
         def log_message(self, *args):
@@ -130,7 +130,7 @@ def test_fresh_install(machine, system):
         assert os.access(m.commands / name, os.X_OK) and not re.search("__[A-Z]", (m.commands / name).read_text())
     assert (m.ghost / ".src").read_text() == f"{m.repo}\n" and (m.ghost / ".install-env").read_text() == ""
     config = (m.profile / "config.yaml").read_text()
-    assert "ollama-local" not in config and "__" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config
+    assert "ollama-local" not in config and "fallback_model:" not in config and not re.search("__[A-Z]", config) and f"{m.ghost}/privacy/uncensored_prefill.json" in config
     assert (m.profile / ".env").exists() and (m.ghost / "privacy" / "uncensored_prefill.json").exists()
 
 
@@ -161,7 +161,8 @@ def test_services_on_a_mac(machine):
     domain = f"gui/{os.getuid()}"
     assert calls == [*(f"launchctl bootout {domain}/{label}" for label in OLD_AGENTS),
                      f"launchctl bootstrap {domain} {agents}/ai.dreamfort.ghost.plist"]
-    m.install()   # again: the running one is replaced
+    (m.ghost / "privacy" / ".made").unlink()
+    m.install()   # something new: the running one is replaced
     assert [c for c in m.calls() if c.startswith("launchctl")][3:] == [f"launchctl bootout {domain}/ai.dreamfort.ghost", calls[-1]]
 
 
@@ -226,17 +227,17 @@ def test_an_update_brings_the_new_model_list(machine):
     assert not any(cache.exists() for cache in caches)
 
 
-def test_your_edits_are_kept_beside_the_new_files(machine):
+def test_an_update_keeps_your_settings(machine):
+    """(tests/test_profile.py has the rest.) An older ghost's, which can't be told from its defaults, are set aside."""
     m = machine()
     m.install()
-    for name in ("config.yaml", "SOUL.md"):
-        with open(m.profile / name, "a") as fh:
-            fh.write("# mine\n")
+    with open(m.profile / "config.yaml", "a") as fh:
+        fh.write("mcp_servers:\n  mine:\n    command: x\n")
     done = m.install()
-    for name in ("config.yaml", "SOUL.md"):
-        assert f"Your previous {name} is kept as {m.profile / name}.prev" in done.stdout
-        assert "# mine" in (m.profile / f"{name}.prev").read_text() and "# mine" not in (m.profile / name).read_text()
-    assert "previous" not in m.install().stdout and "# mine" in (m.profile / "config.yaml.prev").read_text()
+    assert "previous" not in done.stdout and "mcp_servers" in (m.profile / "config.yaml").read_text()
+    shutil.rmtree(m.profile / ".shipped")
+    assert f"Your previous config.yaml is kept as {m.profile / 'config.yaml'}.prev" in m.install().stdout
+    assert "mcp_servers" in (m.profile / "config.yaml.prev").read_text() and "mcp_servers" not in (m.profile / "config.yaml").read_text()
 
 
 @pytest.mark.parametrize("verbose", ["", "1"])
@@ -333,11 +334,29 @@ def test_two_installs_at_once(machine):
     m = machine()
     lock = m.ghost / ".installing"
     lock.mkdir(parents=True)
-    (lock / "pid").write_text(str(os.getpid()))   # someone who is still there
-    done = m.install()
-    assert done.returncode == 1 and "already being installed or updated" in done.stderr and not m.engine.exists()
-    (lock / "pid").write_text("999999")           # and someone who isn't
-    assert m.install().returncode == 0 and not lock.exists()
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "/x/.ghost-src/install.sh"])
+    try:
+        (lock / "pid").write_text(str(other.pid))   # someone who is still at it
+        done = m.install()
+        assert done.returncode == 1 and "already being installed or updated" in done.stderr and not m.engine.exists()
+    finally:
+        other.kill()
+        other.wait()
+    for gone in (other.pid, 1):                     # and someone who isn't, or whose number someone else has now
+        (lock / "pid").write_text(str(gone))
+        assert m.install().returncode == 0 and not lock.exists()
+        lock.mkdir()
+
+
+def test_an_update_with_nothing_new_leaves_the_bridge_alone(machine):
+    """A background task may be in the middle of a reply, which is billed all the same."""
+    m = machine("Darwin")
+    m.install()
+    (m.home / "calls").unlink()
+    assert m.install().returncode == 0 and not any(c.startswith("launchctl") for c in m.calls())
+    bridge = m.repo / "privacy" / "bridge.py"
+    bridge.write_text(bridge.read_text(encoding="utf-8") + "# newer\n", encoding="utf-8")
+    assert m.install().returncode == 0 and any(c.startswith("launchctl bootstrap") for c in m.calls())
 
 
 def test_nobody_else_can_look_into_it(machine):

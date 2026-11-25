@@ -11,10 +11,14 @@ The relay sees your login and IP but only ciphertext; the enclave sees the promp
 verified before a token of it reaches the engine. The login (`ghost-login`) is a DreamFort account or API
 key: see ghost_auth.py.
 """
+import hashlib
+import hmac
 import json
 import os
 import random
 import re
+import select
+import socket
 import threading
 import time
 import warnings
@@ -26,7 +30,7 @@ from opengradient_ohttp import OHTTPTransport, TeeVerificationError
 import ghost_auth
 import outbound
 import spend
-from enclaves import REGISTRY, Enclaves
+from enclaves import REGISTRY, Enclaves, RegistryError
 from ghost_auth import AuthError
 from localhttp import LocalServer
 
@@ -142,6 +146,33 @@ def _apply_model_steer(obj):
     return obj
 
 
+# ── Who you are ───────────────────────────────────────────────────────────────
+# The engine tells the model where it is: your home folder, the folder you're in, its own. That's your user name, in a
+# prompt that promises not to carry it, so `~` it is. (What you write, and what the agent reads, goes as it is.)
+def _homes():
+    home = os.path.expanduser("~")
+    found = {home, os.path.realpath(home), home.replace("\\", "/")}
+    if os.name == "nt":   # as Git Bash writes it
+        found.add("/" + home[0].lower() + home[2:].replace("\\", "/"))
+    return sorted((h for h in found if len(h) > 3), key=len, reverse=True)
+
+
+_HOME = re.compile("(?:" + "|".join(map(re.escape, _homes()) or ["(?!)"]) + r")(?![\w-])(?!\.\w)", re.I if os.name == "nt" else 0)
+
+
+def _without_home(obj):
+    for message in obj.get("messages") or []:
+        if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = _HOME.sub("~", content)
+        for part in content if isinstance(content, list) else []:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                part["text"] = _HOME.sub("~", part["text"])
+    return obj
+
+
 # ── Limits ────────────────────────────────────────────────────────────────────
 # The gateway caps a reply at 4096 tokens unless the request says otherwise, and that includes the
 # model's hidden reasoning: left alone, a long answer comes back cut off or empty, marked "stop", and
@@ -171,9 +202,10 @@ def _apply_limits(obj):
 # retried only while it has not been accepted, and a reply that comes back unusable is reported as that
 # instead of being quietly paid for again.
 UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transport; never contacted
-# Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice.
-TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
-_RETRY_STATUS = frozenset({500, 502, 503})   # (a 504 is a load balancer giving up on a request that goes on running)
+# Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice. The relay itself gives
+# up on an enclave after four, so five of silence is a connection that died (a laptop that slept, say).
+TIMEOUT = httpx.Timeout(300.0, connect=15.0, pool=60.0)
+_RETRY_STATUS = frozenset({500, 502, 503})
 _NEVER_ARRIVED = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.WriteError, httpx.WriteTimeout, httpx.ProxyError)
 _MAX_TRIES = 3
 _BUSY_WAITS = (5, 10, 20, 30)   # seconds: the relay takes 40 requests a minute, which a quick agent can reach
@@ -181,11 +213,15 @@ _BREAK_WINDOW = 300.0
 
 _lock = threading.Lock()
 _clients = {}
-_last_break = 0.0
+_broke = {}   # request -> when it last came back unusable
 
 
 class Unusable(Exception):
     """A reply that was generated, and billed, but can't be used."""
+
+
+class HungUp(Exception):
+    """Whoever asked has gone (Ctrl-C, say)."""
 
 
 class Refused(Exception):
@@ -196,13 +232,31 @@ class Refused(Exception):
         self.status = status
 
 
-def _upstream():
+class Relay(httpx.BaseTransport):
+    """The way to the relay. What isn't sealed didn't come from it: some networks answer for everyone, with a login page."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def handle_request(self, request):
+        resp = self.inner.handle_request(request)
+        kind = resp.headers.get("content-type", "")
+        if resp.status_code < 400 and (resp.status_code != 200 or kind.startswith(("text/", "application/json"))):
+            resp.close()
+            return httpx.Response(502, json={"detail": "something on this network answers instead of DreamFort (a login page, perhaps)"})
+        return resp
+
+    def close(self):
+        self.inner.close()
+
+
+def _upstream(refused=None):
     """(client, headers) for the login in use. Raises AuthError when nobody is logged in."""
-    relay, token = ghost_auth.credentials()
+    relay, token = ghost_auth.credentials(refused)
     key = (relay, outbound.proxy(relay))   # a laptop changes networks
     with _lock:
         if key not in _clients:
-            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, transport=outbound.transport(relay))
+            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, transport=Relay(outbound.transport(relay)))
             transport._resolver = Enclaves(outbound.transport(REGISTRY, public_only=True), log)
             _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
         return _clients[key], {"Authorization": f"Bearer {token}"}
@@ -216,11 +270,13 @@ def _wait(seconds):
     time.sleep(seconds)
 
 
-def _open(obj):
+def _open(obj, gone):
     """Start one generation and return its open stream. Retries only what the enclave never accepted."""
-    tries, waits = 0, list(_BUSY_WAITS)
+    tries, waits, refused = 0, list(_BUSY_WAITS), None
     while True:
-        client, headers = _upstream()
+        client, headers = _upstream(refused)
+        if gone():
+            raise HungUp
         try:
             resp = client.send(client.build_request("POST", UPSTREAM, json=obj, headers=headers), stream=True)
         except _NEVER_ARRIVED as e:
@@ -234,11 +290,16 @@ def _open(obj):
         if resp.status_code < 400:
             return resp
         try:
-            message = _decode_error(resp.read(), resp.status_code)
+            raw = resp.read()
         finally:
             resp.close()
-        if resp.status_code == 504:
+        message = _decode_error(raw, resp.status_code)
+        if resp.status_code == 504 and b'"tee_' not in raw:   # a load balancer, giving up on a request that goes on running
             raise httpx.ReadTimeout(message)
+        token = headers["Authorization"].removeprefix("Bearer ")
+        if resp.status_code == 401 and refused is None and not ghost_auth.api_key():
+            refused = token   # renew it, once
+            continue
         if resp.status_code == 429 and waits:
             log(f"too many requests this minute; waiting {waits[0]}s")
             _wait(waits.pop(0))
@@ -332,16 +393,16 @@ def _host_failed(error):
     return Refused(status, f"the model's host answered: {message[:600]}")
 
 
-def _generate(obj):
+def _generate(obj, gone=lambda: False):
     """One generation, verified and whole. Always streamed from the enclave: its buffered form cuts long
     replies off at the relay's timeout and quietly 'repairs' a truncated tool call into valid JSON."""
-    global _last_break
     why = spend.paused()
     if why:
         raise Refused(422, why)
+    asked = hashlib.sha256(json.dumps(obj.get("messages"), sort_keys=True).encode()).digest()   # the engine's retry is the same
     reply, resp, ended = Reply(obj["max_tokens"]), None, False
     try:
-        resp = _open({**obj, "stream": True})
+        resp = _open({**obj, "stream": True}, gone)
         for line in resp.iter_lines():
             if not line.startswith("data:"):
                 continue
@@ -356,14 +417,19 @@ def _generate(obj):
             ended = ended or reply.finish is not None
         if not ended:
             raise httpx.RemoteProtocolError("the reply stopped early")
-    except (AuthError, Refused):   # never accepted, or never billed
+    except (AuthError, Refused, HungUp):   # never accepted, or never billed
         raise
+    except httpx.ProxyError as e:
+        raise Refused(502, f"couldn't reach DreamFort: {e}") from e
     except Exception as e:
         # Accepted, so billed, but we never got it (cut off, unverifiable, unreadable). One engine retry is fair;
         # a second break in a row is not.
         tokens_in = len(json.dumps(obj)) // 4
         spend.record(obj.get("model"), tokens_in, 2000, spend.estimate(obj.get("model"), tokens_in, 2000))
-        again, _last_break = time.time() - _last_break < _BREAK_WINDOW, time.time()
+        now = time.time()
+        for old in [k for k, at in list(_broke.items()) if now - at > _BREAK_WINDOW]:
+            _broke.pop(old, None)
+        again, _broke[asked] = asked in _broke, now
         log(f"reply lost after it was accepted: {type(e).__name__}: {e}")
         message = ("a reply came back without the enclave's signature on it, so it was thrown away" if isinstance(e, TeeVerificationError)
                    else f"the connection to the enclave broke before the reply arrived ({type(e).__name__})")
@@ -374,10 +440,9 @@ def _generate(obj):
         if resp is not None:
             resp.close()
     tokens_in = int(reply.usage.get("prompt_tokens") or 0)
-    cost = reply.cost if reply.cost is not None else spend.estimate(obj.get("model"), tokens_in, reply.tokens_out)
+    cost = reply.cost * spend.MARKUP if reply.cost is not None else spend.estimate(obj.get("model"), tokens_in, reply.tokens_out)
     spend.record(obj.get("model"), tokens_in, reply.tokens_out, cost)
     reply.check()
-    _last_break = 0.0
     return reply
 
 
@@ -398,11 +463,45 @@ def _decode_error(raw: bytes, status) -> str:
     return message[:600]
 
 
+def _check():
+    """Can a request get from here to an enclave? Nothing is run or billed: the relay's config document and the registry."""
+    found = {}
+    try:
+        relay, token = ghost_auth.credentials()
+        with httpx.Client(transport=outbound.transport(relay), timeout=20) as client:
+            resp = client.get(f"{relay}/config", headers={"Authorization": f"Bearer {token}"})
+            found["relay"] = resp.status_code
+    except ghost_auth.Unavailable as e:
+        found["unreachable"] = str(e)
+    except AuthError as e:
+        found["login"] = str(e)
+    except httpx.HTTPError as e:
+        found["unreachable"] = str(e) if isinstance(e, httpx.ProxyError) else type(e).__name__
+    try:
+        found["enclaves"] = len(Enclaves(outbound.transport(REGISTRY, public_only=True)).listed())
+    except (RegistryError, httpx.HTTPError):
+        found["enclaves"] = None
+    return found
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
         pass
+
+    def _mine(self):
+        return hmac.compare_digest(self.headers.get("Authorization") or "", f"Bearer {ghost_auth.bridge_token()}")
+
+    def _gone(self):
+        """Nobody is waiting for the answer any more, so nothing should be paid for it."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+        except ValueError:   # too many open files for select; carry on
+            return False
 
     # ── tiny helpers ──
     def _send_json(self, status, obj):
@@ -430,6 +529,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
+            return
+        if path == "/check":   # for `ghost doctor`: the way out, as the bridge sees it
+            self._send_json(200, _check()) if self._mine() else self._error(403, "not yours")
             return
         static = {"/model-catalog.json": CATALOG_BYTES, "/models-dev.json": MODELS_DEV_BYTES}.get(self.path)
         if static is not None:
@@ -477,6 +579,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Origin"):   # a web page: it must not spend your credits behind your back
             self._error(403, "ghost's bridge doesn't answer web pages")
             return
+        if not self._mine():
+            self._error(403, "ghost's bridge only answers the ghost it belongs to. If that's this one, its settings are out of date: run `ghost update`")
+            return
         if not ("chat/completions" in path or path.endswith("/completions")):
             self._error(404, "ghost's bridge only serves /v1/chat/completions")
             return
@@ -502,12 +607,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Apply the per-model uncensor steer (e.g. DeepSeek) and the limits before forwarding.
-        obj = _apply_limits(_apply_model_steer(obj))
+        obj = _apply_limits(_apply_model_steer(_without_home(obj)))
 
         log(f"chat/completions model={obj.get('model')} stream={wants_stream} effort={obj['reasoning_effort']} "
             f"max_tokens={obj['max_tokens']}")
         try:
-            reply = _generate(obj)
+            reply = _generate(obj, self._gone)
+        except HungUp:
+            log("whoever asked has gone; nothing was sent")
+            self.close_connection = True
+            return
+        except ghost_auth.Unavailable as e:
+            log(f"login not renewed: {e}")
+            self._error(503, str(e))
+            return
         except AuthError as e:
             log(f"not logged in: {e}")
             self._error(401, str(e))

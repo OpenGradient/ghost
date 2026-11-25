@@ -29,12 +29,21 @@ NEW="$ENG.new"; OLD="$ENG.old"
 LAUNCH="$ENG/.hermes/bin/hermes"
 RESTART="$GHOST_HOME/.restart-gateway"   # present while a gateway this script stopped is owed a start
 REFRESH="$GHOST_HOME/.refresh-gateway"   # present while an installed gateway still points at the previous engine
-# The background gateway, when it's installed as a service.
+# The background gateway, when it's installed as a service. It's wanted when it runs, and when it's waiting to: it keeps
+# trying for as long as a chat's own gateway is in its way.
 case "$(uname -s)" in
   Darwin) UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
-          service_running() { case "$(launchctl list ai.hermes.gateway-uncensored 2>/dev/null)" in *'"PID" = '*) ;; *) false ;; esac; } ;;
+          service_wanted() {
+            case "$(launchctl list ai.hermes.gateway-uncensored 2>/dev/null || true)" in
+              *'"PID" = '*) ;; *'"LastExitStatus" = 0;'*) false ;; *'"LastExitStatus" = '*) ;; *) false ;;
+            esac
+          } ;;
   *)      UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
-          service_running() { systemctl --user is-active --quiet hermes-gateway-uncensored.service 2>/dev/null; } ;;
+          service_wanted() {
+            case "$(systemctl --user is-active hermes-gateway-uncensored.service 2>/dev/null || true)" in
+              active|activating|reloading) ;; *) false ;;
+            esac
+          } ;;
 esac
 # Ours, whichever engine it runs: an old ghost on Linux ran its gateway from ~/.hermes, with ghost's state.
 service_installed() { [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$UNIT"; }
@@ -170,7 +179,7 @@ check_closed   # (that took a while)
 OLD_BIN=""
 for bin in "$LAUNCH" "$ENG/venv/bin/hermes"; do [ -x "$bin" ] && { OLD_BIN="$bin"; break; }; done
 old_engine() { HERMES_HOME="$GHOST_HOME" "$OLD_BIN" -p uncensored "$@" </dev/null >/dev/null 2>&1; }
-if service_installed && service_running; then : > "$RESTART"; fi
+if service_installed && service_wanted; then : > "$RESTART"; fi
 # (--yes: it won't stop in the middle of something, a cron job say, without being told. Old engines don't know the word.)
 [ -z "$OLD_BIN" ] || old_engine gateway stop --yes || old_engine gateway stop || true
 

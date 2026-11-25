@@ -13,10 +13,12 @@ dependencies = [
     # The bridge's transport: seals each request to an attested enclave (OHTTP/HPKE) and checks the
     # signature on every reply. Pinned so a re-install can't silently change the verification protocol.
     "opengradient-ohttp>=0.1,<0.2",
-    "httpx>=0.27",
+    "httpx[socks]>=0.27",
     # The certificates this machine trusts, for networks with one of their own.
     "truststore>=0.10",
     "certifi",
+    # Puts your settings back on top of a new release's, comments and all (scripts/write_profile.py).
+    "ruamel-yaml>=0.18",
 ]
 
 [tool.uv]

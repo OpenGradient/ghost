@@ -36,6 +36,10 @@ class AuthError(Exception):
     """Nobody is logged in, or the login no longer works."""
 
 
+class Unavailable(AuthError):
+    """The login may be fine, but DreamFort couldn't be asked to renew it just now."""
+
+
 _lock = threading.RLock()
 _cached = {}  # path -> (mtime_ns, value)
 
@@ -66,15 +70,24 @@ def _write_private(path, text):
     os.replace(tmp, path)
 
 
-def bridge_proof(nonce):
-    """What only your own bridge can answer. Its port may be held by another program, or by the ghost of someone
-    else on this machine, and neither may have your prompts."""
+def _bridge_key():
     try:
-        key = BRIDGE_KEY_FILE.read_text(encoding="utf-8")
+        return BRIDGE_KEY_FILE.read_text(encoding="utf-8")
     except OSError:
         key = secrets.token_hex(32)
         _write_private(BRIDGE_KEY_FILE, key)
-    return hmac.new(key.encode(), nonce.encode(), "sha256").hexdigest()
+        return key
+
+
+def bridge_proof(nonce):
+    """What only your own bridge can answer. Its port may be held by another program, or by the ghost of someone
+    else on this machine, and neither may have your prompts."""
+    return hmac.new(_bridge_key().encode(), f"proof {nonce}".encode(), "sha256").hexdigest()
+
+
+def bridge_token():
+    """What only your own ghost can send the bridge, which spends your credits."""
+    return hmac.new(_bridge_key().encode(), b"token", "sha256").hexdigest()[:40]
 
 
 # ── API key ───────────────────────────────────────────────────────────────────
@@ -124,7 +137,7 @@ def _refresh(session):
                           json={"refresh_token": session["refresh_token"]}, verify=outbound.trust(),
                           headers={"apikey": config.get("supabase_anon_key") or ""}, timeout=15)
     except httpx.HTTPError as e:
-        raise AuthError(f"couldn't reach DreamFort to renew your login ({type(e).__name__}); check your connection") from e
+        raise Unavailable(f"couldn't reach DreamFort to renew your login ({type(e).__name__}); check your connection") from e
     if resp.status_code in (400, 401, 403):
         # Another process sharing this file may have renewed it first, which retires our copy.
         with _lock:
@@ -138,7 +151,7 @@ def _refresh(session):
         body = resp.json()
         fresh = {**session, "access_token": body["access_token"], "refresh_token": body.get("refresh_token") or session["refresh_token"]}
     except (httpx.HTTPError, ValueError, KeyError) as e:
-        raise AuthError("DreamFort couldn't renew your login; try again in a moment") from e
+        raise Unavailable("DreamFort couldn't renew your login just now; try again in a moment") from e
     fresh["expires_at"] = body.get("expires_at") or int(time.time()) + int(body.get("expires_in") or 3600)
     _write_private(SESSION_FILE, json.dumps(fresh, indent=2))
     return fresh
@@ -164,9 +177,9 @@ def label():
     return f"DreamFort account ({email})" if email else "DreamFort account"
 
 
-def credentials():
-    """(relay url, bearer token) for the login in use. Renews an account's token when it is due. Raises
-    AuthError when there is nothing to use."""
+def credentials(refused=None):
+    """(relay url, bearer token) for the login in use. Renews an account's token when it is due, or when it's the one
+    that was just refused (this machine's clock may be behind). Raises AuthError when there is nothing to use."""
     key = api_key()
     if key:
         return CHAT_API_URL + API_KEY_RELAY, key
@@ -174,7 +187,7 @@ def credentials():
         session = account()
         if session is None:
             raise AuthError(NOT_LOGGED_IN)
-        if _expired(session):
+        if _expired(session) or session["access_token"] == refused:
             session = _refresh(session)
     return CHAT_API_URL + ACCOUNT_RELAY, session["access_token"]
 

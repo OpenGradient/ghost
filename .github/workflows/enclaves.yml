@@ -1,0 +1,17 @@
+name: enclaves
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  # ghost falls back to these when the registry can't be read, and an enclave has new keys each time it is deployed.
+  built-in:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q "opengradient-ohttp>=0.1,<0.2"
+      - run: python tests/check_enclaves.py

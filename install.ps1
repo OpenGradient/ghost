@@ -120,11 +120,16 @@ Write-Text "$GhostHome\.install-env" (($chosen | ForEach-Object { "$_`n" }) -joi
 
 # --- 2. the bridge ---------------------------------------------------------------------------
 Say "Installing the privacy bridge"
-# Windows won't replace the files of a program that is running.
-foreach ($task in "ghost-bridge", "ghost-scrubber", "ghost-veil") { Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
-Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue | Where-Object {
-  $_.CommandLine -and ($_.CommandLine.Contains("$Priv\bridge.py") -or $_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
-} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+function Ask-Launch($what) { & $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; print($what)" $Priv }
+$made = (@(Get-ChildItem "$Repo\privacy\*.py" | Sort-Object Name | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) + [IO.File]::ReadAllText("$Repo\uv.lock")) -join ""
+$made = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($made)))).Hash
+$same = (Test-Path "$Priv\.made") -and [IO.File]::ReadAllText("$Priv\.made") -eq $made -and (Test-Path $Py) -and "$(Ask-Launch 'launch.bridge_up()')" -eq "True"
+if (-not $same) {   # Windows won't replace the files of a program that is running
+  foreach ($task in "ghost-bridge", "ghost-scrubber", "ghost-veil") { Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
+  Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -and ($_.CommandLine.Contains("$Priv\bridge.py") -or $_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
+  } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 $env:UV_PROJECT_ENVIRONMENT = $Venv
 Push-Location $Repo
@@ -180,7 +185,7 @@ $flags = @(); if ($LocalModel) { $flags += @("--local-model", $LocalModel) }
 # --- 6. the background service ---------------------------------------------------------------
 Say "Starting the background service"
 $Pyw = "$Venv\Scripts\pythonw.exe"; if (-not (Test-Path $Pyw)) { $Pyw = $Py }
-try {
+if (-not $same) { try {
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $task = @{
     TaskName  = "ghost-bridge"
@@ -191,9 +196,10 @@ try {
       -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
   }
   Register-ScheduledTask @task -Force | Out-Null
-} catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." }
-$why = & $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; print('' if launch.ensure_bridge() else launch.bridge_problem())" $Priv
+} catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." } }
+$why = Ask-Launch "'' if launch.ensure_bridge() else launch.bridge_problem()"
 if ("$why".Trim() -or $LASTEXITCODE -ne 0) { throw "ghost's background service isn't running: $why" }
+Write-Text "$Priv\.made" $made
 foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }   # older releases'
 foreach ($old in "scrubbing_proxy.py", "presidio_scrub.py", "scrub_patterns.py", "ensure_scrubber_route.py", ".scrub", ".no_scrub",
                  ".full_redaction", ".presidio", ".presidio_failed", ".pass_paths", ".proxy") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }

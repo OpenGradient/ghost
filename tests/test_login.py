@@ -304,8 +304,18 @@ def machine(dream, tmp_path, monkeypatch):
     monkeypatch.setattr(spend, "_entries", [(time.time(), 0.21)])
     monkeypatch.setattr(spend, "BUDGET_FILE", tmp_path / "budget")
     monkeypatch.setattr(spend, "LEDGER", tmp_path / "spend.jsonl")
-    monkeypatch.setattr("enclaves.Enclaves.listed", lambda self: 3)
-    return doctor
+    import bridge
+    import enclaves
+    monkeypatch.setattr("enclaves.Enclaves.listed", lambda self: [1, 2, 3])
+    monkeypatch.setattr("enclaves.REMEMBERED", tmp_path / "enclaves.json")
+    monkeypatch.setattr(ghost_auth, "BRIDGE_KEY_FILE", tmp_path / "bridge.key")
+    monkeypatch.setattr(bridge, "LOG", str(tmp_path / "bridge.log"))
+    server = bridge.LocalServer(("127.0.0.1", 0), bridge.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(launch, "PORT", server.server_port)
+    yield doctor
+    server.shutdown()
+    server.server_close()
 
 
 def test_doctor_when_all_is_well(dream, machine, capsys):
@@ -332,7 +342,7 @@ def test_doctor_contacts_nobody_before_you_log_in(dream, machine, capsys):
     (lambda d, m: (m.setattr("launch.ensure_bridge", lambda: False), m.setattr("launch.port_taken", lambda: False)),
      "✗ Bridge     isn't running: it didn't start"),
     (lambda d, m: (m.setattr("launch.ensure_bridge", lambda: False), m.setattr("launch.port_taken", lambda: True)),
-     "✗ Bridge     isn't running: another program is using port 8788"),
+     "✗ Bridge     isn't running: another program is using port"),
     (lambda d, m: m.setattr("launch.engine_binary", lambda: None), "✗ Engine     not installed  ->  ghost update"),
     (lambda d, m: m.setattr("spend._entries", [(time.time(), 6.0)]), "✗ Spending   $6.00 of $5.00 in the last hour  ->  ghost budget 10"),
 ])

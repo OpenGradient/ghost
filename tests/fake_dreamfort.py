@@ -36,7 +36,8 @@ FAILURES = {
     "402": (402, {"detail": "Insufficient credits"}), "429": (429, {"error": "Rate limit exceeded: 40 per 1 minute"}),
     "503": (503, {"detail": {"code": "tee_unreachable", "message": "TEE OHTTP request failed"}}),
     "retired": (502, {"detail": {"code": "tee_not_active", "message": "Selected TEE is not active"}}),
-    "page": (502, b"<html><h1>502 Bad Gateway</h1></html>"), "451": (451, {"error": "Content policy violation"}),
+    "page": (502, b"<html><h1>502 Bad Gateway</h1></html>"), "portal": (200, b"<html>Welcome to the hotel</html>"),
+    "slow": (504, {"detail": {"code": "tee_timeout", "message": "no answer from the enclave"}}), "451": (451, {"error": "Content policy violation"}),
     # accepted, and then not delivered
     "504": (504, b"<html><h1>504 Gateway Time-out</h1></html>"), "silent": None, "empty": None, "cut": None, "drop": None,
     "forged": None, "unsigned": None,
@@ -104,6 +105,12 @@ class DreamFort:
             elif message["role"] == "tool":
                 after.append(content)
         return text, after
+
+    @staticmethod
+    def names(inner):
+        """Does the harness's own prompt say whose machine this is?"""
+        home = os.path.expanduser("~")
+        return any(home in str(m.get("content")) or home.replace("\\", "/") in str(m.get("content")) for m in inner["messages"] if m["role"] == "system")
 
     def failure(self, text):
         found = re.search(r"\[\[fail (\w+) ?(\d*)\]\]", text)
@@ -189,7 +196,7 @@ def handler(service):
             if billed:
                 service.billed.append(inner)
             service.note(accepted=inner["model"], billed=billed, kind=kind, max_tokens=inner.get("max_tokens"), effort=inner.get("reasoning_effort"),
-                         tools=len(inner.get("tools") or []), asked=service.asked(inner)[0][:80])
+                         tools=len(inner.get("tools") or []), asked=service.asked(inner)[0][:80], named=service.names(inner))
             if kind == "504":
                 return self.send(*refused, "text/html")
             self.close_connection = True

@@ -75,7 +75,7 @@ if ($purge) {
   if (-not (Get-ChildItem -Force $GhostHome)) { Remove-Item -Force $GhostHome }
 } else {
   foreach ($name in "venv", "tools", "installs", "cache", "python", "uv", "privacy\__pycache__", "privacy\*.py", "privacy\uncensored_prefill.json",
-                    "privacy\bridge.key", "privacy\bridge.log*", ".src", ".install-env", ".installing") { Remove-Hard "$GhostHome\$name" }
+                    "privacy\bridge.key", "privacy\.made", "privacy\proxies.json", "privacy\enclaves.json", "privacy\bridge.log*", ".src", ".install-env", ".installing") { Remove-Hard "$GhostHome\$name" }
   Write-Host "ghost is gone. Your chats, skills, settings and login are still in $GhostHome (delete it to remove them too)."
 }
 foreach ($name in "ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1", "ghost-uninstall.cmd", "ghost-uninstall.ps1") {

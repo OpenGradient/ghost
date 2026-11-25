@@ -30,8 +30,13 @@ chmod +x "$home/tools/python-0/bin/python3" "$dir/.hermes/bin/hermes"
 
 # Stand in for the service managers, which would otherwise answer for this machine's own ghost.
 SERVICE_MANAGERS = {
-    "launchctl": '#!/bin/sh\n[ -e "$HOME/gateway-on" ] && echo \'"PID" = 123;\' || echo \'"LastExitStatus" = 0;\'\n',
-    "systemctl": '#!/bin/sh\n[ -e "$HOME/gateway-on" ]\n',
+    "launchctl": """#!/bin/sh
+case "$(cat "$HOME/gateway" 2>/dev/null)" in running) echo '"PID" = 123; "LastExitStatus" = 0;' ;; waiting) echo '"LastExitStatus" = 19200;' ;;
+*) echo '"LastExitStatus" = 0;' ;; esac
+""",
+    "systemctl": """#!/bin/sh
+case "$(cat "$HOME/gateway" 2>/dev/null)" in running) echo active ;; waiting) echo activating; exit 3 ;; *) echo inactive; exit 3 ;; esac
+""",
 }
 
 
@@ -85,9 +90,8 @@ class Box:
             time.sleep(0.05)
         return proc
 
-    def service(self, running, runs=None):
-        if running:
-            (self.home / "gateway-on").touch()
+    def service(self, state, runs=None):
+        (self.home / "gateway").write_text(state)
         rel = ("Library/LaunchAgents/ai.hermes.gateway-uncensored.plist" if platform.system() == "Darwin"
                else ".config/systemd/user/hermes-gateway-uncensored.service")
         unit = self.home / rel
@@ -252,16 +256,17 @@ def test_anything_else_is(released, change):
 
 def test_a_current_engine_leaves_the_gateway_alone(released):
     assert released.run().returncode == 0
-    released.service(running=True)
+    released.service("running")
     assert released.run("--refresh-gateway").returncode == 0   # for the build just made
     before = released.calls()
     assert released.run().returncode == 0 and released.run("--refresh-gateway").returncode == 0
     assert [c for c in released.calls()[len(before):] if c != "--version"] == []
 
 
-def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):
+@pytest.mark.parametrize("state", ["running", "waiting"])   # for a chat's own gateway to go
+def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box, state):
     assert box.run(src=box.source("one")).returncode == 0
-    box.service(running=True)
+    box.service(state)
     assert box.run(src=box.source("two")).returncode == 0
     assert "-p uncensored gateway stop --yes" in box.calls() and box.restart.exists()
     assert box.run("--refresh-gateway").returncode == 0
@@ -272,7 +277,7 @@ def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):
 def test_a_gateway_an_old_ghost_ran_from_elsewhere_is_moved_too(box):
     """On Linux it ran from ~/.hermes/hermes-agent, with ghost's state. Left alone it stayed stopped."""
     assert box.run(src=box.source("one")).returncode == 0
-    box.service(running=True, runs=f"HERMES_HOME={box.state}/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main")
+    box.service("running", runs=f"HERMES_HOME={box.state}/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main")
     assert box.run(src=box.source("two")).returncode == 0 and box.restart.exists()
     assert box.run("--refresh-gateway").returncode == 0
     assert box.calls()[-1] == "-p uncensored gateway install --force --start-now --start-on-login"
@@ -280,21 +285,21 @@ def test_a_gateway_an_old_ghost_ran_from_elsewhere_is_moved_too(box):
 
 def test_someone_elses_gateway_is_not_touched(box):
     assert box.run(src=box.source("one")).returncode == 0
-    box.service(running=True, runs=f"HERMES_HOME={box.home}/.hermes/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python")
+    box.service("running", runs=f"HERMES_HOME={box.home}/.hermes/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python")
     assert box.run(src=box.source("two")).returncode == 0 and not box.restart.exists()
     assert box.run("--refresh-gateway").returncode == 0 and not [c for c in box.calls() if "gateway install" in c]
 
 
 def test_gateway_is_started_again_when_the_build_fails(box):
     assert box.run(src=box.source("one")).returncode == 0
-    box.service(running=True)
+    box.service("running")
     assert box.run(src=box.source("two", broken=True)).returncode != 0
     assert box.calls()[-1] == "-p uncensored gateway start" and not box.restart.exists()
 
 
 def test_stopped_gateway_stays_stopped(box):
     assert box.run(src=box.source("one")).returncode == 0
-    box.service(running=False)
+    box.service("stopped")
     assert box.run(src=box.source("two")).returncode == 0
     assert box.run("--refresh-gateway").returncode == 0
     assert box.calls()[-1] == "-p uncensored gateway install --force --no-start-now --start-on-login"

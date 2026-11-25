@@ -90,11 +90,15 @@ one_at_a_time() {   # (two would build the engine over each other)
   local pid
   if ! mkdir "$LOCK" 2>/dev/null; then
     pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
-    if [ -n "$pid" ] && [ "$pid" != $$ ] && kill -0 "$pid" 2>/dev/null; then
-      echo "ghost is already being installed or updated (pid $pid). Wait for that to finish." >&2; exit 1
-    fi   # (or whoever left it there is gone)
+    case "$([ -z "$pid" ] || command_of "$pid")" in *install*)
+      echo "ghost is already being installed or updated (pid $pid). Wait for that to finish." >&2; exit 1 ;;
+    esac   # (or whoever left it there is gone)
   fi
   echo $$ > "$LOCK/pid"
+}
+
+command_of() {   # what a process is running, if it's there (minimal systems have no `ps`)
+  ps -ww -o command= -p "$1" 2>/dev/null || tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null || true
 }
 
 remember() {   # what `ghost update` and `ghost uninstall` need to know
@@ -276,21 +280,26 @@ free_port() {   # stopping a service finishes in its own time, and two bridges c
   done
 }
 
-stop_bridge() {   # whichever process holds the port, as it says itself, if it is ours (minimal systems have no `pkill`, nor `ps`)
+stop_bridge() {   # whichever process holds the port, as it says itself, if it is ours
   local pid
   pid="$(curl --noproxy '*' -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p' || true)"
   [ -n "$pid" ] || return 0
-  case "$(ps -ww -o command= -p "$pid" 2>/dev/null || tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)" in
-    *"$PRIV/"*) kill "$pid" || true ;;
-  esac
+  case "$(command_of "$pid")" in *"$PRIV/"*) kill "$pid" || true ;; esac
 }
+
+ask_launch() { GHOST_HOME="$GHOST_HOME" "$PYTHON" -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; print($1)" "$PRIV"; }
 
 fill() { "$PYTHON" -Es "$REPO/scripts/fill.py" "$1" "__PYTHON__=$PYTHON" "__GHOST_HOME__=$GHOST_HOME" "__ENG__=$ENG"; }
 
 # The bridge runs in the background and restarts by itself: launchd on macOS, systemd on Linux. Where neither
 # is available (some containers, WSL without systemd) `ghost` starts it when it's needed.
 start_service() {
-  local label unit
+  local label unit made file="$HOME/.config/systemd/user/ghost-bridge.service"
+  [ "$OS" != Darwin ] || file="$HOME/Library/LaunchAgents/ai.dreamfort.ghost.plist"
+  made="$(cat "$REPO"/privacy/*.py "$REPO/uv.lock" "$REPO/launchd/ai.dreamfort.ghost.plist" "$REPO/systemd/ghost-bridge.service" | git hash-object --stdin)"
+  if [ -f "$file" ] && [ "$(cat "$PRIV/.made" 2>/dev/null)" = "$made" ] && [ "$(ask_launch "launch.bridge_up()")" = True ]; then
+    return 0   # running, and nothing new: a background task may be in the middle of something
+  fi
   if [ "$OS" = Darwin ]; then
     local agents="$HOME/Library/LaunchAgents" domain; domain="gui/$(id -u)"
     mkdir -p "$agents"
@@ -327,13 +336,10 @@ start_service() {
     pkill -f "veil serve --foreground --skip-setup --port 11435" || true
     free_port
   fi
-  local old   # what only those ran
-  for old in scrubbing_proxy.py presidio_scrub.py scrub_patterns.py ensure_scrubber_route.py \
-             .scrub .no_scrub .full_redaction .presidio .presidio_failed .pass_paths .proxy; do rm -f "$PRIV/$old"; done
   local why
-  why="$(GHOST_HOME="$GHOST_HOME" "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch
-print("" if launch.ensure_bridge() else launch.bridge_problem())' "$PRIV")" || why="its log is $PRIV/bridge.log"
+  why="$(ask_launch "'' if launch.ensure_bridge() else launch.bridge_problem()")" || why="its log is $PRIV/bridge.log"
   [ -z "$why" ] || die "ghost's background service isn't running: $why."
+  echo "$made" > "$PRIV/.made"
 }
 
 command_file() {
@@ -345,6 +351,8 @@ command_file() {
 
 install_commands() {
   local name
+  for name in scrubbing_proxy.py presidio_scrub.py scrub_patterns.py ensure_scrubber_route.py \
+              .scrub .no_scrub .full_redaction .presidio .presidio_failed .pass_paths .proxy; do rm -f "$PRIV/$name"; done   # older releases'
   if [ -e "$BIN/ghost" ] && ! grep -qsi -e GHOST_HOME -e hermes "$BIN/ghost"; then
     mv "$BIN/ghost" "$BIN/ghost.other"   # (the Ghost blog's command has that name too)
     NOTES+=("There was another program at $BIN/ghost. It is now $BIN/ghost.other.")

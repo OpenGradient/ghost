@@ -1,4 +1,5 @@
 """The launcher: what runs the engine, what asks for a login first, and what must contact nobody."""
+import json
 import os
 import socket
 import subprocess
@@ -44,7 +45,7 @@ class Box:
         self.configure(HOSTED)
         for name, value in (("HOME", root), ("PRIV", root / "privacy"), ("PROFILE", self.profile), ("ENGINE", root / "engine")):
             monkeypatch.setattr(launch, name, value)
-        monkeypatch.setattr(launch, "run_engine", lambda args: self.ran.append(list(args)) or 0)
+        monkeypatch.setattr(launch, "run_engine", lambda args, provider="opengradient": self.ran.append(list(args)) or 0)
         monkeypatch.setattr(launch, "ensure_bridge", lambda: self.started.append(1) or True)
         monkeypatch.setattr(launch.ghost_auth, "KEY_FILE", root / "privacy" / "dreamfort_api_key")
         monkeypatch.setattr(launch.ghost_auth, "SESSION_FILE", root / "veil" / "session.json")
@@ -92,6 +93,38 @@ def test_everything_else_works_without_one(box, args):
     assert (box.ran, box.started) == ([args], [])   # and contacts nobody, not even the bridge
 
 
+@pytest.mark.parametrize("argv, args, stops", [
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--start-now"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "start"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "setup"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--no-start-now"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--help"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "status"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "stop"], False),
+    (["gateway", "run"], ["gateway", "install"], False),   # the one that's to stay
+    (None, ["gateway", "install"], False),
+])
+def test_a_chats_own_gateway_makes_way_for_the_one_you_set_up(box, monkeypatch, capsys, argv, args, stops):
+    """It idles on for ten minutes, or for good with Telegram in it, and the service couldn't start until it left."""
+    record, calls, busy = box.profile / "gateway.pid", [], []
+    if argv:
+        record.write_text(json.dumps({"pid": 1, "argv": argv}))
+
+    def run(command, **how):
+        calls.append(command[1:])
+        if not busy:
+            record.unlink()
+        return SimpleNamespace(returncode=1 if busy else 0)
+    monkeypatch.setattr(launch, "engine_binary", lambda: Path("engine"))
+    monkeypatch.setattr(launch.subprocess, "run", run)
+    assert launch.main(args) == 0 and box.ran == [args]
+    assert calls == ([["-p", "uncensored", "gateway", "stop"]] if stops else [])
+    if stops:
+        busy.append(1)   # in the middle of something
+        record.write_text(json.dumps({"pid": 1, "argv": argv}))
+        assert launch.main(args) == 0 and "Run this again when it's done" in capsys.readouterr().err
+
+
 def test_a_terminal_is_asked_to_log_in_first(box, monkeypatch):
     calls = terminal(monkeypatch, answer=0)
     assert launch.main(["-z", "hi"]) == 0
@@ -132,6 +165,28 @@ def test_a_dead_bridge_is_reported_and_the_engine_still_runs(box, monkeypatch, c
     assert "background service isn't running" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("config", ["", "model:\n  default: gpt-9\n", HOSTED.replace("  opengradient:\n", "  other:\n")])
+def test_without_its_settings_it_does_not_start(box, capsys, config):
+    """The engine would go by its own defaults then: any vendor whose key it finds."""
+    box.log_in()
+    box.configure(config)
+    assert launch.main([]) == 1 and box.ran == [] and "ghost update" in capsys.readouterr().err
+
+
+def test_what_you_typed_goes_when_the_chats_do(box):
+    history = box.profile / ".hermes_history"
+    old, new = (time.strftime("%Y-%m-%d %H:%M:%S.000000", time.localtime(time.time() - s)) for s in (90000, 3600))
+    entries = {old: "\n# {}\n+my secret\n+# 2020-01-01 not a date line\n", new: "\n# {}\n+today\n"}
+    history.write_text("".join(text.format(at) for at, text in entries.items()))
+    box.log_in()
+    box.configure(HOSTED + "sessions:\n  auto_prune: false\n  retention_days: 1\n")
+    launch.main([])
+    assert "my secret" in history.read_text()
+    box.configure(HOSTED + "sessions:\n  auto_prune: true\n  retention_days: 1\n")
+    launch.main([])
+    assert history.read_text() == f"\n# {new}\n+today\n"
+
+
 def test_another_program_on_the_bridges_port_never_gets_a_prompt(box, monkeypatch, capsys):
     box.log_in()
     monkeypatch.setattr(launch, "ensure_bridge", lambda: False)
@@ -160,7 +215,10 @@ def test_asking_for_redaction_says_it_is_gone(box, capsys, flag):
 def test_local_contacts_nobody(box, monkeypatch, capsys):
     monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "ghost-tool:latest  6GB", ""))
     assert launch.main(["--local", "-z", "hi"]) == 0
-    assert box.ran == [["-m", "ghost-tool:latest", "--provider", "ollama-local", "-z", "hi"]] and box.started == []
+    assert box.ran == [["-m", "ghost-tool:latest", "--provider", "ollama-local", "--toolsets", launch.LOCAL_TOOLS, "-z", "hi"]] and box.started == []
+    assert not {"web", "browser", "image_gen", "delegation"} & set(launch.LOCAL_TOOLS.split(","))   # nothing that reaches out by itself
+    launch.main(["--local", "-t", "web", "-z", "hi"])
+    assert box.ran[-1] == ["-m", "ghost-tool:latest", "--provider", "ollama-local", "-t", "web", "-z", "hi"]   # unless you ask for it
     box.configure(HOSTED[:HOSTED.index("  ollama-local:")])   # Ollama is there, but ghost wasn't installed with it
     assert launch.main(["--local"]) == 1 and "no local model installed" in capsys.readouterr().err
     box.configure(HOSTED)
@@ -174,7 +232,7 @@ def test_settings_are_read_from_the_shipped_profile():
     for text, offline in ((shipped, True), (HOSTED, False), (OFFLINE, True)):
         assert launch.default_model(text) == "abliterated-model-large-v2" and launch.local_fallback(text) is offline
     assert launch.local_model(HOSTED) == "ghost-tool:latest"
-    assert launch.default_model("") == "ghost" and launch.local_fallback("") is False
+    assert launch.default_model("") is None and launch.local_fallback("") is False
 
 
 def test_a_refreshed_nous_login_stays_on_the_bridge(box):
@@ -269,12 +327,12 @@ def test_our_own_bridge_process(tmp_path, monkeypatch):
 def test_the_engine_gets_ghosts_profile_and_not_your_api_key(tmp_path):
     engine = tmp_path / "engine" / ".hermes" / "bin" / "hermes"
     engine.parent.mkdir(parents=True)
-    engine.write_text('#!/bin/sh\necho "$HERMES_HOME|$ANTHROPIC_API_KEY|$*"\nexit 7\n')
+    engine.write_text('#!/bin/sh\necho "$HERMES_HOME|$ANTHROPIC_API_KEY$OPENROUTER_API_KEY$FAL_KEY|$HERMES_INFERENCE_PROVIDER|$MY_API_KEY|$*"\nexit 7\n')
     engine.chmod(0o755)
-    env = {**os.environ, "GHOST_HOME": str(tmp_path / "state"), "GHOST_ENGINE": str(tmp_path / "engine"),
-           "ANTHROPIC_API_KEY": "sk-secret", "HERMES_HOME": "/somewhere/else"}
+    env = {**os.environ, "GHOST_HOME": str(tmp_path / "state"), "GHOST_ENGINE": str(tmp_path / "engine"), "OPENROUTER_API_KEY": "sk-secret",
+           "FAL_KEY": "secret", "ANTHROPIC_API_KEY": "sk-secret", "HERMES_HOME": "/somewhere/else", "HERMES_INFERENCE_PROVIDER": "openrouter", "MY_API_KEY": "mine"}
     done = subprocess.run([sys.executable, "-Es", launch.__file__, "sessions", "list", "a b"], env=env, capture_output=True, text=True, timeout=30)
-    assert (done.returncode, done.stdout) == (7, f"{tmp_path / 'state'}||-p uncensored sessions list a b\n")
+    assert (done.returncode, done.stdout) == (7, f"{tmp_path / 'state'}||opengradient|mine|-p uncensored sessions list a b\n")
 
 
 def test_a_missing_engine_is_explained(tmp_path):
