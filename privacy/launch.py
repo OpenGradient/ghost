@@ -167,15 +167,16 @@ def ensure_bridge():
         return True
     if port_taken() and not bridge_up():
         return False
-    if not _start_service():   # no service manager here, or none that has it
+    for start in (_start_service, _start_process):   # no service manager here, or none that has it, or it won't
         try:
-            _start_process()
+            if start() is False:
+                continue
         except OSError:
             return False
-    for _ in range(60):
-        time.sleep(0.2)
-        if bridge_up():
-            return True
+        for _ in range(40):
+            time.sleep(0.2)
+            if bridge_up():
+                return True
     return False
 
 

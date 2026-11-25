@@ -1,0 +1,3 @@
+# The scripts run where they're checked out, also by a git that would rather have CRLF.
+* text=auto eol=lf
+*.gif binary

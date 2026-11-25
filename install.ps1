@@ -11,8 +11,47 @@
 # Options: -Local (an offline model too; needs Ollama), -NoBrowser (skip Chromium and the computer-use driver).
 # `ghost update` remembers them.
 param([switch]$Local, [switch]$NoBrowser)
+
+# Run as `irm | iex` there is no checkout: get one, and carry on from there. That is your own session, so nothing is
+# set in it, and nothing exits.
+if (-not $PSScriptRoot -or -not (Test-Path "$PSScriptRoot\profile\config.yaml")) {
+  & {
+    param($Options)
+    $ErrorActionPreference = "Stop"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "ghost needs git: install Git for Windows (https://git-scm.com/download/win), then run this again." }
+    $saved = @{}; foreach ($v in "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "GIT_DIR", "GIT_WORK_TREE") { $saved[$v] = [Environment]::GetEnvironmentVariable($v) }
+    try {
+      Remove-Item Env:GIT_DIR, Env:GIT_WORK_TREE -ErrorAction SilentlyContinue   # some other repository's
+      # git and the engine's installer read only the environment; this also follows a company's PAC script.
+      if (-not $env:HTTPS_PROXY) {
+        try {
+          $to = [Uri]"https://github.com/"; $by = [Net.WebRequest]::GetSystemWebProxy().GetProxy($to)
+          if ($by -and $by.AbsoluteUri -ne $to.AbsoluteUri) { $env:HTTPS_PROXY = $env:HTTP_PROXY = $by.AbsoluteUri.TrimEnd("/"); $env:NO_PROXY = "127.0.0.1,localhost" }
+        } catch {}
+      }
+      # A network that inspects TLS has a certificate only Windows knows, and git may be using a list of its own.
+      function Git-Net { & git @args; if ($LASTEXITCODE) { & git -c http.sslBackend=schannel -c http.schannelCheckRevoke=false @args } }
+      $src = "$env:USERPROFILE\.ghost-src"
+      if (Test-Path "$src\.git") {   # always the released branch, whatever was checked out before
+        Git-Net -C $src fetch --quiet origin main
+        if ($LASTEXITCODE) { throw "couldn't get the latest ghost from github.com. Check your connection, then run this again." }
+        git -C $src checkout --quiet main; if (-not $LASTEXITCODE) { git -C $src merge --quiet --ff-only origin/main }
+        if ($LASTEXITCODE) { throw "Your copy of ghost in $src has changes of yours in it. Set them aside (git -C $src stash) and run this again." }
+      } else {
+        if (Test-Path $src) { Remove-Item -Recurse -Force $src }
+        Git-Net clone --quiet https://github.com/OpenGradient/ghost.git $src
+        if ($LASTEXITCODE) { throw "couldn't get ghost from github.com. Check your connection, then run this again." }
+      }
+      & powershell -ExecutionPolicy Bypass -NoProfile -File "$src\install.ps1" @Options
+      if ($LASTEXITCODE) { throw "ghost was not installed; the reason is above." }
+    } finally { foreach ($v in $saved.Keys) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) } }
+  } (@(if ($Local) { "-Local" }; if ($NoBrowser) { "-NoBrowser" }))
+  return
+}
+$Repo = $PSScriptRoot
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+foreach ($v in "GIT_DIR", "GIT_WORK_TREE", "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
 $GhostHome  = "$env:USERPROFILE\.ghost"
 $Eng        = "$env:USERPROFILE\.ghost-engine"
@@ -29,22 +68,9 @@ function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit cod
 # (what the machine is, not this PowerShell)
 $arch = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
 if ($arch -eq "ARM64") { throw "ghost doesn't run on Windows on ARM yet. It does in WSL2 there (https://learn.microsoft.com/windows/wsl/install): use the Linux command." }
-
-# Run as `irm | iex` there is no checkout: get one, and carry on from there.
-$Repo = if ($PSScriptRoot) { $PSScriptRoot } else { "" }
-if (-not $Repo -or -not (Test-Path "$Repo\profile\config.yaml")) {
-  if (-not (Have git)) { throw "ghost needs git: install Git for Windows (https://git-scm.com/download/win), then run this again." }
-  $Src = "$env:USERPROFILE\.ghost-src"
-  if (Test-Path "$Src\.git") {   # always the released branch, whatever was checked out before
-    git -C $Src fetch --quiet origin main; Check "git fetch"
-    git -C $Src checkout --quiet main; Check "git checkout (does $Src have changes of yours in it?)"
-    git -C $Src merge --quiet --ff-only origin/main; Check "git merge (does $Src have changes of yours in it?)"
-  } else {
-    if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
-    git clone --quiet https://github.com/OpenGradient/ghost.git $Src; Check "git clone"
-  }
-  & powershell -ExecutionPolicy Bypass -NoProfile -File "$Src\install.ps1" @PSBoundParameters
-  exit $LASTEXITCODE
+if (-not (Have git)) { throw "ghost needs git: install Git for Windows (https://git-scm.com/download/win), then run this again." }
+if (-not $env:CI -and ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "   This is an administrator window. ghost needs none: use it from an ordinary one, where its background process is yours." -ForegroundColor Yellow
 }
 
 # --- options: what was asked for now, or last time -------------------------------------------
@@ -63,13 +89,19 @@ Say "Checking this machine"
 New-Item -ItemType Directory -Force -Path $GhostHome | Out-Null
 try { $lock = [IO.File]::Open("$GhostHome\.installing", "OpenOrCreate", "ReadWrite", "None") }
 catch { throw "ghost is already being installed or updated. Wait for that to finish." }
-trap { $lock.Dispose(); break }
+trap { if ($lock) { $lock.Dispose() }; break }
 & "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Check   # nothing changes under an open ghost
 # What ghost brings stays in its own folder: uv, the Pythons it fetches, and their cache. uv is ours, because one you
 # have may be too old; it trusts the certificates the system trusts, as a company network may have one of its own.
 $env:UV_CACHE_DIR = "$GhostHome\cache\uv"; $env:UV_PYTHON_INSTALL_DIR = "$GhostHome\python"
 $env:UV_SYSTEM_CERTS = "1"; $env:UV_NATIVE_TLS = "1"
-foreach ($v in "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+# git and the engine's installer read only the environment; this also follows a company's PAC script.
+if (-not $env:HTTPS_PROXY) {
+  try {
+    $to = [Uri]"https://github.com/"; $by = [Net.WebRequest]::GetSystemWebProxy().GetProxy($to)
+    if ($by -and $by.AbsoluteUri -ne $to.AbsoluteUri) { $env:HTTPS_PROXY = $env:HTTP_PROXY = $by.AbsoluteUri.TrimEnd("/"); $env:NO_PROXY = "127.0.0.1,localhost" }
+  } catch {}
+}
 $UvVersion = "0.13.10"; $Uv = "$GhostHome\uv\uv.exe"
 if (-not ((Test-Path $Uv) -and "$(& $Uv --version)".StartsWith("uv $UvVersion"))) {
   $env:UV_UNMANAGED_INSTALL = "$GhostHome\uv"
@@ -93,7 +125,6 @@ foreach ($task in "ghost-bridge", "ghost-scrubber", "ghost-veil") { Stop-Schedul
 Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue | Where-Object {
   $_.CommandLine -and ($_.CommandLine.Contains("$Priv\bridge.py") -or $_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }   # older releases'
 
 $env:UV_PROJECT_ENVIRONMENT = $Venv
 Push-Location $Repo
@@ -104,10 +135,18 @@ Remove-Item Env:UV_PROJECT_ENVIRONMENT
 if (Test-Path "$Priv\.scrub") {   # someone relied on it: say so rather than let them find out
   Write-Host "   Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first."
 }
-foreach ($old in "scrubbing_proxy.py", "presidio_scrub.py", "scrub_patterns.py", "ensure_scrubber_route.py", ".scrub", ".no_scrub",
-                 ".full_redaction", ".presidio", ".presidio_failed", ".pass_paths", ".proxy") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }
 Copy-Item "$Repo\privacy\*.py" $Priv -Force
 Copy-Item "$Repo\profile\uncensored_prefill.json" $Priv -Force
+function Install-Command($name) {
+  # Your folder by its variable: these files are read in a code page your name may not be in.
+  $you = if ($name.EndsWith(".cmd")) { "%USERPROFILE%" } else { '$env:USERPROFILE' }
+  $text = [IO.File]::ReadAllText("$Repo\bin\windows\$name")
+  foreach ($path in @(("__PYTHON__", $Py), ("__GHOST_HOME__", $GhostHome), ("__ENG__", $Eng))) {
+    $text = $text.Replace($path[0], $path[1].Replace($env:USERPROFILE, $you))
+  }
+  Write-Text "$BinDir\$name" ($text -replace "`r?`n", "`r`n")   # cmd misreads labels in files with bare newlines
+}
+"ghost-uninstall.cmd", "ghost-uninstall.ps1" | ForEach-Object { Install-Command $_ }   # the way out, should a later step fail
 
 # --- 3. the engine ---------------------------------------------------------------------------
 Say "Setting up the engine (a few minutes the first time)"
@@ -155,21 +194,23 @@ try {
 } catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." }
 $why = & $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; print('' if launch.ensure_bridge() else launch.bridge_problem())" $Priv
 if ("$why".Trim() -or $LASTEXITCODE -ne 0) { throw "ghost's background service isn't running: $why" }
+foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }   # older releases'
+foreach ($old in "scrubbing_proxy.py", "presidio_scrub.py", "scrub_patterns.py", "ensure_scrubber_route.py", ".scrub", ".no_scrub",
+                 ".full_redaction", ".presidio", ".presidio_failed", ".pass_paths", ".proxy") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }
 
 # --- 7. the commands -------------------------------------------------------------------------
 Say "Installing the ghost command"
-foreach ($name in "ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1", "ghost-uninstall.cmd", "ghost-uninstall.ps1") {
-  # Your folder by its variable: these files are read in a code page your name may not be in.
-  $you = if ($name.EndsWith(".cmd")) { "%USERPROFILE%" } else { '$env:USERPROFILE' }
-  $text = [IO.File]::ReadAllText("$Repo\bin\windows\$name")
-  foreach ($path in @(("__PYTHON__", $Py), ("__GHOST_HOME__", $GhostHome), ("__ENG__", $Eng))) {
-    $text = $text.Replace($path[0], $path[1].Replace($env:USERPROFILE, $you))
-  }
-  Write-Text "$BinDir\$name" ($text -replace "`r?`n", "`r`n")   # cmd misreads labels in files with bare newlines
-}
+"ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1" | ForEach-Object { Install-Command $_ }
 & "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -RefreshGateway
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ("$userPath" -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("Path", "$BinDir;$userPath", "User") }
+$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)   # (with its variables left as they are)
+$userPath = $key.GetValue("Path", "", "DoNotExpandEnvironmentNames")
+if (($userPath -split ";") -notcontains $BinDir -and ($userPath -split ";") -notcontains "%USERPROFILE%\.local\bin") {
+  $key.SetValue("Path", "$BinDir;$userPath", "ExpandString")
+  [Environment]::SetEnvironmentVariable("GHOST_PATH_SET", $null, "User")   # tells the open windows that something changed
+}
+$key.Close()
+$other = Get-Command ghost -CommandType Application -ErrorAction SilentlyContinue | Where-Object { (Split-Path $_.Source) -ne $BinDir } | Select-Object -First 1
+if ($other) { Write-Host "   Another program called ghost is on your PATH ($($other.Source)). This one is $BinDir\ghost.cmd." }
 
 $who = & $Py -Es "$Priv\ghost_login.py" --status
 if ($LASTEXITCODE -eq 0) { Say "ghost is ready. $who." } else { Say "ghost is ready. It asks you to log in the first time." }

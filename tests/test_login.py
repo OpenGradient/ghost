@@ -224,8 +224,18 @@ def test_a_damaged_session_file_is_no_login(dream):
 
 
 # ── API key ───────────────────────────────────────────────────────────────────
+def piped(text, encoding="utf-8"):
+    return io.TextIOWrapper(io.BytesIO(text.encode(encoding)))
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig"])
+def test_a_key_file_powershell_wrote(dream, monkeypatch, encoding):
+    monkeypatch.setattr(sys, "stdin", piped(f"\r\n{GOOD_KEY}\r\n", encoding))
+    assert ghost_login.main(["--with-api-key"]) == 0 and ghost_auth.api_key() == GOOD_KEY
+
+
 def test_api_key_from_stdin(dream, monkeypatch, capsys):
-    monkeypatch.setattr(sys, "stdin", io.StringIO(GOOD_KEY + "\n"))
+    monkeypatch.setattr(sys, "stdin", piped(GOOD_KEY + "\n"))
     assert ghost_login.main(["--with-api-key"]) == 0
     out = capsys.readouterr().out
     assert "Logged in with your DreamFort API key (df_sk_…1234)" in out and GOOD_KEY not in out
@@ -235,14 +245,14 @@ def test_api_key_from_stdin(dream, monkeypatch, capsys):
 
 @pytest.mark.parametrize("key, words", [(BAD_KEY, "doesn't accept that key"), ("sk-other", "start with df_sk_"), ("", "start with df_sk_")])
 def test_a_key_that_does_not_work_is_not_stored(dream, monkeypatch, capsys, key, words):
-    monkeypatch.setattr(sys, "stdin", io.StringIO(key + "\n"))
+    monkeypatch.setattr(sys, "stdin", piped(key + "\n"))
     assert ghost_login.main(["--with-api-key"]) == 1
     assert words in capsys.readouterr().out and ghost_auth.mode() is None
 
 
 def test_a_key_without_credits_says_so(dream, monkeypatch, capsys):
     dream.credits = False
-    monkeypatch.setattr(sys, "stdin", io.StringIO(GOOD_KEY))
+    monkeypatch.setattr(sys, "stdin", piped(GOOD_KEY))
     assert ghost_login.main(["--with-api-key"]) == 0
     assert "no credits yet" in capsys.readouterr().out and ghost_auth.mode() == "api_key"
 
@@ -250,7 +260,7 @@ def test_a_key_without_credits_says_so(dream, monkeypatch, capsys):
 # ── switching, status, logout ─────────────────────────────────────────────────
 def test_the_last_login_is_the_one_used(dream, monkeypatch):
     ghost_login.main(["--device"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO(GOOD_KEY))
+    monkeypatch.setattr(sys, "stdin", piped(GOOD_KEY))
     ghost_login.main(["--with-api-key"])
     assert ghost_auth.mode() == "api_key"
     dream.polls_before_approval = 0

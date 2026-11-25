@@ -142,7 +142,8 @@ def test_a_new_install_contacts_nobody_until_you_log_in(machine):
     assert (chat.returncode, chat.stdout) == (1, "") and "not logged in. Run: ghost login" in chat.stderr
     assert m.command("ghost", "--version").stdout == "Ghost v9\n"
     assert m.command("ghost-login", "--status").returncode == 1
-    assert {c for c in m.calls() if c.startswith("curl")} <= {"curl -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz",
+    assert {c for c in m.calls() if c.startswith("curl")} <= {"curl --noproxy * -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz",
+                                                              "curl --noproxy * -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz",
                                                               f"curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh"}
 
 
@@ -427,7 +428,7 @@ def test_uninstall_keeps_your_data(installed):
     assert not any((m.ghost / name).exists() for name in ("venv", "uv", "python", "cache", ".src", ".installing"))
     assert {p.name: p.read_text() for p in (m.ghost / "privacy").iterdir()} == kept
     assert (m.profile / "state.db").read_text() == "chats" and session.exists() and m.repo.exists()
-    assert "engine -p uncensored gateway stop" in m.calls()
+    assert "engine -p uncensored gateway stop --yes" in m.calls()
     back = m.install()   # and back again, as you left it
     assert back.returncode == 0 and "Logged in with your DreamFort API key (df_sk_…abcd)" in back.stdout
     assert (m.profile / "state.db").read_text() == "chats" and (m.ghost / "privacy" / "budget").read_text() == "20\n"

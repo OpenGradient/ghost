@@ -5,6 +5,7 @@
 #   ghost uninstall --yes       don't ask (your data is kept)
 #   ghost uninstall --purge     delete your data too
 set -uo pipefail
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_NAMESPACE   # some other repository's
 
 GHOST_HOME=__GHOST_HOME__
 ENG=__ENG__
@@ -39,8 +40,9 @@ if ! ours_home "$GHOST_HOME"; then
   exit 0
 fi
 
-open="$( (ps axww -o pid=,command= 2>/dev/null || true) | awk -v e="$ENG" \
-  '(index($0, e "/") || index($0, e "\047")) && !/gateway run|process_supervisor/ { print $1 }')"
+REAL="$(cd "$ENG" 2>/dev/null && pwd -P || echo "$ENG")"
+open="$( (ps axww -o pid=,command= 2>/dev/null || true) | awk -v e="$ENG" -v r="$REAL" \
+  '(index($0, e "/") || index($0, e "\047") || index($0, r "/") || index($0, r "\047")) && !/gateway run|process_supervisor/ { print $1 }')"
 if [ -n "$open" ] && [ -z "${GHOST_FORCE:-}" ]; then
   echo "ghost is open (pid $(echo $open)). Close those windows and run this again." >&2
   exit 1
@@ -53,13 +55,20 @@ if [ -z "$YES" ]; then
 fi
 
 echo "Stopping ghost"
+UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
+[ -f "$UNIT" ] || UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
+GATEWAY=""; if [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$UNIT"; then GATEWAY=1; fi
 if [ -x "$ENG/.hermes/bin/hermes" ]; then
-  HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway stop </dev/null >/dev/null 2>&1
-  UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
-  [ -f "$UNIT" ] || UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
-  if [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$UNIT"; then
-    HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway uninstall </dev/null >/dev/null 2>&1
-  fi
+  engine() { HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored "$@" </dev/null >/dev/null 2>&1; }
+  engine gateway stop --yes || engine gateway stop
+  [ -z "$GATEWAY" ] || engine gateway uninstall
+fi
+if [ -n "$GATEWAY" ] && [ -f "$UNIT" ]; then   # (the engine couldn't)
+  case "$UNIT" in
+    *.plist) launchctl bootout "gui/$(id -u)/ai.hermes.gateway-uncensored" >/dev/null 2>&1 ;;
+    *)       systemctl --user disable --now hermes-gateway-uncensored.service >/dev/null 2>&1 ;;
+  esac
+  rm -f "$UNIT"
 fi
 if [ "$(uname -s)" = Darwin ]; then
   for label in ai.dreamfort.ghost com.advait.hermes-pii-scrubber com.advait.hermes-veil; do
@@ -76,11 +85,17 @@ else
   systemctl --user daemon-reload >/dev/null 2>&1
 fi
 # One `ghost` started itself, where there is no service manager.
-pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p')"
+pid="$(curl --noproxy '*' -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p')"
 if [ -n "$pid" ]; then
   case "$(ps -ww -o command= -p "$pid" 2>/dev/null || tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" in
     *"$GHOST_HOME/privacy/"*) kill "$pid" 2>/dev/null ;;
   esac
+fi
+
+if [ "$(uname -s)" = Darwin ]; then   # the gateway a chat started leaves its entry behind
+  for label in $(launchctl list | awk '/com[.]nousresearch[.]hermes[.]runtime[.]/ { print $3 }'); do
+    case "$(launchctl print "gui/$(id -u)/$label" 2>/dev/null)" in *"path = $GHOST_HOME/"*) launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 ;; esac
+  done
 fi
 
 echo "Removing files"
@@ -100,15 +115,20 @@ for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOM
 done
 rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/ghost.fish"
 if [ "$SRC" = "$HOME/.ghost-src" ] && [ -d "$SRC/.git" ]; then
-  if [ -z "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then rm -rf "$SRC"; else echo "   left $SRC (it has changes of yours)"; fi
+  yours() { git -C "$SRC" status --porcelain; git -C "$SRC" stash list; git -C "$SRC" log --oneline --branches --not --remotes; }
+  if [ -z "$(yours 2>/dev/null)" ]; then rm -rf "$SRC"; else echo "   left $SRC (it has changes of yours)"; fi
 fi
+[ ! -e "$GHOST_HOME/.linger" ] || loginctl disable-linger "$(id -un)" >/dev/null 2>&1
+! grep -qs GHOST_LOCAL "$GHOST_HOME/.install-env" || echo "   left the offline model in Ollama (ollama rm ghost-tool uncensored-local)"
 if [ -n "$PURGE" ]; then
   rm -f "${OG_VEIL_HOME:-$HOME/.opengradient/veil}/session.json"
-  rm -rf "$GHOST_HOME"
+  find "$GHOST_HOME" -mindepth 1 -maxdepth 1 ! -name config -exec rm -rf {} +   # (the Ghost blog's command keeps its own file there)
+  rmdir "$GHOST_HOME" 2>/dev/null
+  [ -d "$HOME/.hermes" ] || rm -rf "$HOME/.local/state/hermes/gateway-locks"; rmdir "$HOME/.local/state/hermes" 2>/dev/null
   echo "ghost and all of its data are gone."
 else
   for dir in venv tools installs cache python uv privacy/__pycache__; do rm -rf "${GHOST_HOME:?}/$dir"; done
-  rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/install.log" "$GHOST_HOME"/privacy/*.py \
+  rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/.linger" "$GHOST_HOME/install.log" "$GHOST_HOME"/privacy/*.py \
         "$GHOST_HOME/privacy/uncensored_prefill.json" "$GHOST_HOME/privacy/bridge.key" "$GHOST_HOME"/privacy/bridge.log*
   echo "ghost is gone. Your chats, skills, settings and login are still in $GHOST_HOME (delete it to remove them too)."
 fi

@@ -13,6 +13,7 @@
 #   GHOST_NO_BROWSER=1   skip Chromium and the computer-use driver (a smaller, faster install)
 #   GHOST_VERBOSE=1      show everything as it runs, instead of keeping it in ~/.ghost/install.log
 set -euo pipefail
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_NAMESPACE   # some other repository's
 
 main() {
   OS="$(uname -s)"
@@ -168,7 +169,7 @@ on_exit() {
   printf '  %s✗%s %s\n\n' "$RED" "$OFF" "$STEP" >&3
   [ "$code" -ne 130 ] || { printf '  Stopped. Run the installer again to carry on.\n\n' >&3; return 0; }
   if [ -z "${GHOST_VERBOSE:-}" ]; then
-    tail -n 15 "$LOG" | sed 's/^/      /' >&3
+    { grep -E '^ *(✗|!!|error:|ERROR)' "$LOG" | tail -n 3 || true; tail -n 15 "$LOG"; } | awk '!seen[$0]++' | sed 's/^/      /' >&3
     printf '\n  The whole log is in %s\n' "$LOG" >&3
   fi
   printf '  Nothing is half-installed: run the installer again once that is fixed.\n\n' >&3
@@ -189,6 +190,10 @@ check_machine() {
   need_git
   local tool open
   for tool in curl tar find; do have "$tool" || die "ghost needs $tool: install it with your package manager, then run this again."; done
+  if [ "$OS" = Darwin ] && [ "$(uname -m)" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" != 1 ] \
+     && [ ! -d "$ENG" ] && ! { have cargo && ls -d /usr/local/opt/openssl@3 >/dev/null 2>&1; }; then   # (the engine's cryptography)
+    die "ghost needs two things on an Intel Mac, to build a part that has no Intel download any more. First: brew install rust openssl@3"
+  fi
   case "$(ldd --version 2>&1 || true)" in *musl*) die "ghost needs a Linux with glibc (Debian, Ubuntu, Fedora, Arch, ...). This one uses musl, as Alpine does." ;; esac
   if ! open="$(GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check 2>&1)"; then
     case "$open" in "!! ghost is open"*) die "${open#!! }" ;; *) echo "$open"; return 1 ;; esac
@@ -227,11 +232,9 @@ install_bridge() {
   if [ -e "$PRIV/.scrub" ]; then   # someone relied on it: say so rather than let them find out
     NOTES+=("Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first.")
   fi
-  local old   # older releases'
-  for old in scrubbing_proxy.py presidio_scrub.py scrub_patterns.py ensure_scrubber_route.py \
-             .scrub .no_scrub .full_redaction .presidio .presidio_failed .pass_paths .proxy; do rm -f "$PRIV/$old"; done
   cp "$REPO"/privacy/*.py "$PRIV/"
   cp "$REPO/profile/uncensored_prefill.json" "$PRIV/"
+  command_file ghost-uninstall   # the way out, should a later step fail
 }
 
 build_engine() {
@@ -268,14 +271,14 @@ write_profile() {
 free_port() {   # stopping a service finishes in its own time, and two bridges can't share the port
   local _
   for _ in $(seq 1 50); do
-    curl -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz || return 0
+    curl --noproxy '*' -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz || return 0
     sleep 0.2
   done
 }
 
 stop_bridge() {   # whichever process holds the port, as it says itself, if it is ours (minimal systems have no `pkill`, nor `ps`)
   local pid
-  pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p' || true)"
+  pid="$(curl --noproxy '*' -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p' || true)"
   [ -n "$pid" ] || return 0
   case "$(ps -ww -o command= -p "$pid" 2>/dev/null || tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)" in
     *"$PRIV/"*) kill "$pid" || true ;;
@@ -296,7 +299,7 @@ start_service() {
       launchctl bootout "$domain/$label" 2>/dev/null || launchctl unload "$agents/$label.plist" 2>/dev/null || true
       rm -f "$agents/$label.plist"
     done
-    free_port
+    stop_bridge; free_port
     fill "$REPO/launchd/ai.dreamfort.ghost.plist" > "$agents/ai.dreamfort.ghost.plist"
     for _ in 1 2 3 4 5; do
       ! launchctl bootstrap "$domain" "$agents/ai.dreamfort.ghost.plist" || break
@@ -311,34 +314,42 @@ start_service() {
       rm -f "$units/$unit.service"
     done
     fill "$REPO/systemd/ghost-bridge.service" > "$units/ghost-bridge.service"
-    systemctl --user daemon-reload
-    systemctl --user enable ghost-bridge.service
-    systemctl --user restart ghost-bridge.service
-    loginctl enable-linger "$(id -un)" || true   # so it's there after a reboot, before you log in
+    systemctl --user stop ghost-bridge.service || true
+    stop_bridge; free_port
+    { systemctl --user daemon-reload && systemctl --user enable ghost-bridge.service && systemctl --user restart ghost-bridge.service; } \
+      || echo "systemd won't have it, so ghost starts it when it's needed"
+    if [ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" = no ]; then   # so it's there after a reboot, before you log in
+      loginctl enable-linger "$(id -un)" && : > "$GHOST_HOME/.linger" || true
+    fi
   else
     stop_bridge
     pkill -f "$PRIV/scrubbing_proxy.py" || true   # older releases' bridge and og-veil
     pkill -f "veil serve --foreground --skip-setup --port 11435" || true
     free_port
   fi
+  local old   # what only those ran
+  for old in scrubbing_proxy.py presidio_scrub.py scrub_patterns.py ensure_scrubber_route.py \
+             .scrub .no_scrub .full_redaction .presidio .presidio_failed .pass_paths .proxy; do rm -f "$PRIV/$old"; done
   local why
   why="$(GHOST_HOME="$GHOST_HOME" "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch
 print("" if launch.ensure_bridge() else launch.bridge_problem())' "$PRIV")" || why="its log is $PRIV/bridge.log"
   [ -z "$why" ] || die "ghost's background service isn't running: $why."
 }
 
+command_file() {
+  mkdir -p "$BIN"
+  fill "$REPO/bin/$1" > "$BIN/.$1.new"
+  chmod +x "$BIN/.$1.new"
+  mv -f "$BIN/.$1.new" "$BIN/$1"   # in one move: `ghost update` is running from one of these
+}
+
 install_commands() {
   local name
-  mkdir -p "$BIN"
   if [ -e "$BIN/ghost" ] && ! grep -qsi -e GHOST_HOME -e hermes "$BIN/ghost"; then
     mv "$BIN/ghost" "$BIN/ghost.other"   # (the Ghost blog's command has that name too)
     NOTES+=("There was another program at $BIN/ghost. It is now $BIN/ghost.other.")
   fi
-  for name in ghost ghost-login ghost-update ghost-uninstall; do
-    fill "$REPO/bin/$name" > "$BIN/.$name.new"
-    chmod +x "$BIN/.$name.new"
-    mv -f "$BIN/.$name.new" "$BIN/$name"   # in one move: `ghost update` is running from one of these
-  done
+  for name in ghost ghost-login ghost-update ghost-uninstall; do command_file "$name"; done
   add_to_path
   GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --refresh-gateway
 }

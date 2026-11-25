@@ -38,7 +38,20 @@ MIN_POLL = 1.0
 LOCAL = 3   # exit code: they chose the offline model instead of logging in
 
 TTY = sys.stdin.isatty() and sys.stdout.isatty()
-COLOR = TTY and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+
+
+def ansi():
+    """Windows' classic console shows colour codes as they are until it's told otherwise."""
+    if os.name != "nt":
+        return True
+    import ctypes
+    kernel32, mode = ctypes.windll.kernel32, ctypes.c_uint32()
+    kernel32.GetStdHandle.restype = ctypes.c_void_p
+    handle = ctypes.c_void_p(kernel32.GetStdHandle(-11))
+    return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)) and kernel32.SetConsoleMode(handle, mode.value | 4))
+
+
+COLOR = TTY and ansi() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
 
 ART = """\
    ▄████████████▄
@@ -444,6 +457,12 @@ def check_key(key):
     return "This key works, but its account has no credits yet." if probe.status_code == 402 else None
 
 
+def piped_key(raw):
+    """What a script sent us. (PowerShell writes UTF-16, or a byte-order mark.)"""
+    text = raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig", "replace")
+    return next((line.strip() for line in text.replace("\0", "").splitlines() if line.strip()), "")
+
+
 def api_key_login(key=None):
     interactive = key is None
     if interactive:
@@ -520,7 +539,7 @@ def main(argv=None):
     try:
         with Keys() as keys:
             if args.with_api_key:
-                api_key_login(sys.stdin.readline().strip())
+                api_key_login(piped_key(sys.stdin.buffer.readline() if TTY else sys.stdin.buffer.read()))
             elif args.api_key:
                 api_key_login()
             elif args.account or args.device or args.browser or args.paste:

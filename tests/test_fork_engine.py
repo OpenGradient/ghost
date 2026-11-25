@@ -129,7 +129,7 @@ def test_upgrade_from_an_older_ghost(box, broken):
     launcher.chmod(0o755)
     done = box.run(src=box.source("new", broken=broken))
     assert (done.returncode != 0) == broken, done.stderr
-    assert "old -p uncensored gateway stop" in box.calls()
+    assert "old -p uncensored gateway stop --yes" in box.calls()
     assert launcher.exists() == broken and (box.engine / "new").exists() != broken
 
 
@@ -263,7 +263,7 @@ def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):
     assert box.run(src=box.source("one")).returncode == 0
     box.service(running=True)
     assert box.run(src=box.source("two")).returncode == 0
-    assert "-p uncensored gateway stop" in box.calls() and box.restart.exists()
+    assert "-p uncensored gateway stop --yes" in box.calls() and box.restart.exists()
     assert box.run("--refresh-gateway").returncode == 0
     assert box.calls()[-1] == "-p uncensored gateway install --force --start-now --start-on-login"
     assert not box.restart.exists()

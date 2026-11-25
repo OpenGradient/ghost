@@ -80,7 +80,8 @@ def spending():
 
 
 def main():
-    color = sys.stdout.isatty()
+    import ghost_login
+    color = sys.stdout.isatty() and ghost_login.ansi()
 
     def style(text, code):
         return f"\x1b[{code}m{text}\x1b[0m" if color else text

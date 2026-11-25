@@ -555,5 +555,10 @@ if __name__ == "__main__":
     except OSError:
         pass
     spend.prune()
+    try:
+        server = LocalServer(LISTEN, Handler)
+    except OSError as e:
+        log(f"can't listen on {LISTEN[0]}:{LISTEN[1]}: {e}")
+        raise SystemExit(1)
     log(f"bridge up on {LISTEN[0]}:{LISTEN[1]}")
-    LocalServer(LISTEN, Handler).serve_forever()
+    server.serve_forever()

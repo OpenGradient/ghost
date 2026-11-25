@@ -5,7 +5,7 @@ Description=ghost's local bridge to the TEE gateway (127.0.0.1:8788)
 Environment="GHOST_HOME=__GHOST_HOME__"
 ExecStart="__PYTHON__" -Es "__GHOST_HOME__/privacy/bridge.py"
 Restart=always
-RestartSec=2
+RestartSec=5
 
 [Install]
 WantedBy=default.target
