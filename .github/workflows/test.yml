@@ -87,7 +87,7 @@ jobs:
           case "$RUNNER_OS" in Windows) cmd //c "$(cygpath -w "$HOME/.local/bin/ghost.cmd")" uninstall --yes ;; *) "$HOME/.local/bin/ghost" uninstall --yes ;; esac
           sleep 3
           test ! -e "$HOME/.ghost-engine"; test ! -e "$HOME/.ghost/venv"; test -e "$HOME/.ghost/profiles/uncensored/config.yaml"
-          ls "$HOME/.local/bin" | tee left
+          (ls "$HOME/.local/bin" 2>/dev/null || true) | tee left   # (removed too, if it was only ghost's)
           if grep -q "^ghost" left; then exit 1; fi
           if curl -fs --max-time 3 http://127.0.0.1:8788/healthz; then exit 1; fi
 
