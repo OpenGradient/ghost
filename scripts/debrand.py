@@ -188,12 +188,12 @@ CODE_PATCHES = [
      r"return bool\(model_name and _NOUS_HERMES_NON_AGENTIC_RE\.search\(model_name\)\)",
      "return False  @NOTE",
      "Hermes tool-calling verified via the OpenGradient TEE gateway"),
-    # -- ghost shows the model what you see unless you turn redaction on, and its status line says which it is:
-    # a red warning at every start only teaches people to ignore warnings.
+    # -- ghost keeps your own secrets readable to you on purpose (security.redact_secrets in the profile): a red
+    # warning about it at every start only teaches people to ignore warnings.
     ("hermes_cli/cli_tui_runtime_mixin.py",
      r'if _redact_raw\.lower\(\) not in \{"1", "true", "yes", "on"\}:',
      "if False:  @NOTE",
-     "off by default, and the launcher says when it is on"),
+     "off on purpose"),
     # -- startup tips: skip the ones that point at accounts and closed models ghost doesn't have.
     ("hermes_cli/tips.py",
      r"    keys = tip_keys\(\)\n",

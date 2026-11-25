@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "privacy"))
 pytest.importorskip("opengradient_ohttp")
-import scrubbing_proxy as sp  # noqa: E402
+import bridge as sp  # noqa: E402
 import spend  # noqa: E402
 
 REAL_UPSTREAM = sp._upstream
@@ -68,7 +68,6 @@ def enclave(monkeypatch, tmp_path):
     monkeypatch.setattr(sp, "_backoff", lambda attempt: None)
     monkeypatch.setattr(sp, "_last_break", 0.0)
     monkeypatch.setattr(sp, "LOG", str(tmp_path / "log"))
-    monkeypatch.setattr(sp, "SCRUB_SENTINEL", str(tmp_path / "none"))
     for name, value in (("DIR", tmp_path), ("LEDGER", tmp_path / "spend.jsonl"), ("BUDGET_FILE", tmp_path / "budget")):
         monkeypatch.setattr(spend, name, value)
     monkeypatch.setattr(spend, "_entries", None)
@@ -226,6 +225,31 @@ def test_the_bridge_says_which_process_it_is(bridge):
 def test_a_web_page_cannot_spend_your_credits(enclave, bridge):
     """Any site can make a browser POST to localhost; only the engine (which sends no Origin) is answered."""
     assert bridge(origin="https://evil.example")[0] == 403 and enclave.seen == 0
+
+
+@pytest.mark.parametrize("path, key", [("/model-catalog.json", "providers"), ("/models-dev.json", "opengradient"), ("/v1/models", "data")])
+def test_the_engines_catalog_reads_are_answered_here(bridge, path, key):
+    """The engine's registry and catalog URLs point at the bridge, so it never asks a third party for them."""
+    with urllib.request.urlopen(bridge.url + path, timeout=5) as resp:
+        assert resp.headers["Content-Type"] == "application/json" and json.load(resp)[key]
+
+
+def test_only_open_weight_models_are_offered_or_allowed(enclave, bridge):
+    assert sp._ALLOWED_GATEWAY_MODELS == {"abliterated-model-large-v2", "hermes-4-405b", "deepseek-v4-pro", "deepseek-v4.1-flash-abliterated"}
+    listed = json.dumps(sp._CATALOG_MODELS).lower()
+    assert not [closed for closed in ("claude", "gpt-", "gemini", "grok", "anthropic", "seed-") if closed in listed]
+    assert bridge(model="anthropic/claude-opus-4-8")[0] == 400 and enclave.seen == 0
+
+
+def test_deepseek_pro_gets_its_steer(enclave, bridge):
+    def system(**extra):
+        bridge(**extra)
+        return [m["content"] for m in enclave.accepted[-1]["messages"] if m["role"] == "system"]
+    steer, = system(model="deepseek/deepseek-v4-pro")
+    assert "no safety guidelines" in steer and "inviolable rule" in steer   # with the clause about minors
+    assert system(model="nous/hermes-4-405b") == []
+    merged, = system(model="deepseek/deepseek-v4-pro", messages=[{"role": "system", "content": "BASE"}, {"role": "user", "content": "hi"}])
+    assert merged == steer + "\n\nBASE"
 
 
 # ── the budget ────────────────────────────────────────────────────────────────

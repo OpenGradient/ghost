@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""PII-scrubbing OpenAI bridge to DreamFort's enclaves.
+"""ghost's local bridge to DreamFort's enclaves: the hosted-inference path.
 
-This is ghost's hosted-inference path. The forked Hermes engine talks plain
-OpenAI HTTP to us over localhost; we scrub PII/secrets out of the outbound
-content (opt-in), settle the request's limits, then seal it to an attested
-enclave with opengradient-ohttp, which owns the whole protocol -- TEE registry,
-Oblivious-HTTP/HPKE encryption, the chat-api relay, and checking the enclave's
-signature on every reply:
+The forked Hermes engine talks plain OpenAI HTTP to us over localhost. We settle the request's limits and
+seal it to an attested enclave with opengradient-ohttp, which owns the whole protocol -- TEE registry,
+Oblivious-HTTP/HPKE encryption, the relay, and checking the enclave's signature on every reply:
 
-    Hermes (uncensored profile)
-      --plaintext localhost-->  THIS (127.0.0.1:8788)     [scrub, limit, seal, verify]
-      ------ ciphertext ----->  chat-api relay  -->  TEE gateway
+    engine  --plaintext, localhost-->  bridge (127.0.0.1:8788)  --ciphertext-->  relay  -->  TEE enclave
 
-The relay sees your account and IP but only ciphertext; the enclave sees the
-prompt but not you. A reply is verified before a token of it reaches the engine.
-The login (`ghost-login`) is a DreamFort account or API key: see ghost_auth.py.
+The relay sees your login and IP but only ciphertext; the enclave sees the prompt but not you. A reply is
+verified before a token of it reaches the engine. The login (`ghost-login`) is a DreamFort account or API
+key: see ghost_auth.py.
 """
 import json
 import os
 import random
-import re
 import threading
 import time
 import warnings
@@ -37,22 +31,7 @@ warnings.filterwarnings("ignore", message="opengradient-ohttp: ")
 
 LISTEN = ("127.0.0.1", 8788)
 STATE = os.path.join(os.environ.get("GHOST_HOME") or os.path.expanduser("~/.ghost"), "privacy")
-LOG = os.path.join(STATE, "scrubber.log")
-DENYLIST_FILE = os.path.join(STATE, "pii_denylist.txt")
-
-# NER PII scrubbing (Presidio + spaCy) with reversible placeholders. Enabled by the
-# .presidio marker; falls back hard to the legacy regex scrubber on any import/runtime
-# error so the bridge never goes down over a scrubber problem.
-PRESIDIO_MARKER = os.path.join(STATE, ".presidio")
-# Written when NER is EXPECTED (.presidio set) but unavailable/failed, so the degradation to the
-# weaker regex scrubber is visible (bin/ghost surfaces it) instead of silent. Cleared on success.
-PRESIDIO_FAILED_MARKER = os.path.join(STATE, ".presidio_failed")
-try:
-    import presidio_scrub
-    _PRESIDIO_OK = True
-except Exception:
-    presidio_scrub = None
-    _PRESIDIO_OK = False
+LOG = os.path.join(STATE, "bridge.log")
 
 # Curated picker whitelist served at /model-catalog.json. ghost is an UNRESTRICTED harness, so it
 # only offers OPEN-WEIGHT, steerable models. Closed, safety-tuned refusers (Claude, GPT, Gemini,
@@ -103,162 +82,6 @@ def log(m):
         pass
 
 
-# ── PII / secret scrubbing ────────────────────────────────────────────────────
-# Patterns live in scrub_patterns.py -- the single source shared with presidio_scrub.py so the
-# two scrub paths can never drift on the security-critical secret set.
-from scrub_patterns import EMAIL_RE, SSN_RE, CC_RE, IP_RE, PHONE_RE, SECRET_RES  # noqa: E402
-
-# Redaction is OPT-IN and OFF BY DEFAULT. ghost is a full-fidelity agent (it does real work,
-# including authorized pentesting, so its own privacy layer must NOT silently mangle secrets it
-# legitimately reads). The ~/.ghost/privacy/.scrub marker (ghost --scrub) turns ON outbound
-# PII + secret redaction; absent (default) = pure pass-through. The hosted path is private either
-# way: every request is sealed to the enclave (OHTTP + TEE).
-SCRUB_SENTINEL = os.path.join(STATE, ".scrub")
-# When scrubbing IS on, filesystem paths are protected from redaction by default so agentic file
-# work is not blinded. Create ~/.ghost/privacy/.full_redaction to redact paths too.
-FULL_REDACTION_SENTINEL = os.path.join(STATE, ".full_redaction")
-PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
-
-
-def load_denylist():
-    seed = []
-    try:
-        with open(DENYLIST_FILE) as f:
-            for ln in f:
-                ln = ln.strip()
-                if ln and not ln.startswith("#"):
-                    seed.append(ln)
-    except FileNotFoundError:
-        pass
-    return sorted(set(seed), key=len, reverse=True)
-
-
-DENY = [(t, re.compile(re.escape(t), re.IGNORECASE)) for t in load_denylist()]
-
-
-def scrub(text, pass_paths=False, pii=True):
-    if not isinstance(text, str) or not text:
-        return text, 0
-    n = 0
-    held = []
-    if pass_paths:
-        def _hold(m):
-            held.append(m.group(0))
-            return f"\x00P{len(held)-1}\x00"
-
-        text = PATH_RE.sub(_hold, text)
-    if pii:  # name/PII redaction is optional; secrets below are always scrubbed
-        for _term, rx in DENY:
-            text, c = rx.subn("[REDACTED_PII]", text)
-            n += c
-        text, c = EMAIL_RE.subn("[REDACTED_EMAIL]", text); n += c
-        text, c = SSN_RE.subn("[REDACTED_SSN]", text); n += c
-        text, c = CC_RE.subn("[REDACTED_CC]", text); n += c
-        text, c = IP_RE.subn("[REDACTED_IP]", text); n += c
-        text, c = PHONE_RE.subn("[REDACTED_PHONE]", text); n += c
-    for rx in SECRET_RES:
-        text, c = rx.subn("[REDACTED_SECRET]", text); n += c
-    for i, p in enumerate(held):
-        text = text.replace(f"\x00P{i}\x00", p)
-    return text, n
-
-
-# Structural / identifier keys whose VALUES must stay verbatim (model id, role/type enums,
-# tool & function names used for dispatch, ids/indexes, schema structure) and media blobs we
-# must not run NER over (base64 images, urls -- Presidio omits URLs anyway). Everything else
-# is a candidate string to scrub. Dict KEYS are never scrubbed, so JSON-schema property names
-# are safe automatically.
-_SKIP_KEYS = frozenset({
-    "model", "role", "type", "name", "id", "tool_call_id", "index", "object", "finish_reason",
-    "required", "enum", "format",
-    "url", "image_url", "data", "b64_json", "input_audio",
-})
-
-
-def _walk_strings(node, fn):
-    """Recursively apply fn(str)->str to every string VALUE in a JSON-like structure, skipping
-    structural keys (`_SKIP_KEYS`). Returns a new structure. This is what makes the outbound
-    scrub COMPLETE -- it reaches messages[].content, tool_calls[].function.arguments, tool /
-    function definitions, prompt, and any nested field, not just top-level content."""
-    if isinstance(node, str):
-        return fn(node)
-    if isinstance(node, list):
-        return [_walk_strings(x, fn) for x in node]
-    if isinstance(node, dict):
-        return {k: (v if k in _SKIP_KEYS else _walk_strings(v, fn)) for k, v in node.items()}
-    return node
-
-
-def scrub_body(obj):
-    """Legacy regex scrubber over the WHOLE request body (used when Presidio is off / fails)."""
-    if not isinstance(obj, dict) or not os.path.exists(SCRUB_SENTINEL):
-        return obj, 0  # scrubbing is opt-in (.scrub marker); default = pass-through
-    pp = not os.path.exists(FULL_REDACTION_SENTINEL)  # default: protect filesystem paths
-    pii = True  # when scrubbing is on, redact both PII and secrets
-    total = 0
-
-    def fn(s):
-        nonlocal total
-        out, k = scrub(s, pp, pii)
-        total += k
-        return out
-
-    return _walk_strings(obj, fn), total
-
-
-def _anonymize_request(obj):
-    """Anonymize the request body -> (obj, count, mapping). Redaction is OPT-IN: with no .scrub
-    marker (default) this is a pure pass-through (full fidelity). With .scrub on and Presidio
-    enabled (.presidio marker) use NER + reversible placeholders; else the legacy regex scrubber."""
-    if not os.path.exists(SCRUB_SENTINEL):
-        return obj, 0, {}  # scrubbing opt-in; default = pass-through
-    if not (_PRESIDIO_OK and os.path.exists(PRESIDIO_MARKER)):
-        obj, n = scrub_body(obj)
-        return obj, n, {}
-    try:
-        pii = True  # scrubbing is on -> redact PII + secrets
-        mapping, total = {}, 0
-
-        def fn(s):
-            nonlocal mapping, total
-            out, mapping, k = presidio_scrub.anonymize(s, mapping, pii=pii)
-            total += k
-            return out
-
-        # Walk the ENTIRE body: content, prompt, tool_calls[].function.arguments (replayed
-        # history -- the critical leak), and tool/function definitions all get the same
-        # per-request mapping so the response/stream de-anon restores them consistently.
-        obj = _walk_strings(obj, fn)
-        return obj, total, mapping
-    except Exception as e:
-        log(f"presidio anonymize failed ({e}); falling back to legacy scrub")
-        obj, n = scrub_body(obj)
-        return obj, n, {}
-
-
-def _deanonymize_body(body, mapping):
-    """Restore placeholders in a non-streaming chat/completions response body. Tool-call
-    arguments are de-anonymized only for LOCAL tools, so the real value (e.g. a secret) is
-    executed/written locally while the model and relay only ever saw the placeholder."""
-    if not mapping or not isinstance(body, dict):
-        return body
-    try:
-        for ch in (body.get("choices") or []):
-            msg = ch.get("message") if isinstance(ch, dict) else None
-            if not isinstance(msg, dict):
-                continue
-            if isinstance(msg.get("content"), str):
-                msg["content"] = presidio_scrub.deanonymize(msg["content"], mapping)
-            for tc in (msg.get("tool_calls") or []):
-                fn = tc.get("function") if isinstance(tc, dict) else None
-                if (isinstance(fn, dict) and isinstance(fn.get("arguments"), str)
-                        and presidio_scrub._is_local_tool(fn.get("name", ""))):
-                    fn["arguments"] = presidio_scrub.deanonymize(fn["arguments"], mapping)
-    except Exception:
-        pass
-    return body
-
-
 # ── Model mapping ─────────────────────────────────────────────────────────────
 def _gateway_model(model):
     """Strip the provider prefix to the gateway model name (mirrors the website).
@@ -299,8 +122,8 @@ _MODEL_STEER = {
 
 
 def _apply_model_steer(obj):
-    """Prepend the per-model uncensor steer (if any) to the request's system message. Static text
-    (no PII), applied after scrubbing. Merges into an existing system message, else inserts one."""
+    """Prepend the per-model uncensor steer (if any) to the request's system message. Merges into an
+    existing system message, else inserts one."""
     steer = _MODEL_STEER.get(obj.get("model"))
     if not steer:
         return obj
@@ -613,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(403, "ghost's bridge doesn't answer web pages")
             return
         if not ("chat/completions" in path or path.endswith("/completions")):
-            self._error(404, "ghost scrubbing bridge only serves /v1/chat/completions")
+            self._error(404, "ghost's bridge only serves /v1/chat/completions")
             return
         try:
             obj = json.loads(raw)
@@ -621,10 +444,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, f"invalid JSON body: {e}")
             return
 
-        # Scrub before anything leaves localhost, then strip the provider prefix to the gateway
-        # model name. With Presidio, redaction is reversible: keep the {placeholder: original}
-        # map on the handler to de-anonymize the reply locally.
-        obj, redactions, self._pii_map = _anonymize_request(obj)
+        # The gateway knows models without their provider prefix.
         wants_stream = bool(obj.get("stream", False))
         obj["model"] = _gateway_model(obj.get("model"))
 
@@ -641,7 +461,7 @@ class Handler(BaseHTTPRequestHandler):
         obj = _apply_limits(_apply_model_steer(obj))
 
         log(f"chat/completions model={obj.get('model')} stream={wants_stream} effort={obj['reasoning_effort']} "
-            f"max_tokens={obj['max_tokens']} redactions={redactions}")
+            f"max_tokens={obj['max_tokens']}")
         try:
             reply = _generate(obj)
         except AuthError as e:
@@ -665,73 +485,26 @@ class Handler(BaseHTTPRequestHandler):
         if wants_stream:
             self._send_stream(reply)
         else:
-            self._send_json(200, _deanonymize_body(reply.completion(), getattr(self, "_pii_map", None)))
+            self._send_json(200, reply.completion())
 
     def _send_stream(self, reply):
-        """Replay the verified reply as SSE. If the request was anonymized, de-anonymize on the way out
-        (content + local tool-call args, split-delta safe)."""
+        """Replay the verified reply as SSE."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.send_header("X-OpenGradient-Verified", "true")
         self.end_headers()
-        mp = getattr(self, "_pii_map", None)
-        deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
-        frames = [b"data: " + json.dumps(e).encode() + b"\n\n" for e in reply.events] + [b"data: [DONE]\n\n"]
         try:
-            for frame in frames:
-                out = deanon.feed(frame) if deanon else frame
-                if out:
-                    self.wfile.write(out)
-            if deanon:
-                tail = deanon.close()
-                if tail:
-                    self.wfile.write(tail)
+            for event in reply.events:
+                self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+            self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except OSError as e:
             log(f"the engine hung up: {e}")
 
 
-def _mark_presidio_failed(reason):
-    """Record that NER was expected but isn't working, so bin/ghost can surface it loudly."""
-    log(f"!! NER scrubber UNAVAILABLE -- falling back to regex (names may NOT be scrubbed): {reason}")
-    try:
-        with open(PRESIDIO_FAILED_MARKER, "w") as f:
-            f.write(reason + "\n")
-    except Exception:
-        pass
-
-
-def _clear_presidio_failed():
-    try:
-        os.remove(PRESIDIO_FAILED_MARKER)
-    except OSError:
-        pass
-
-
 if __name__ == "__main__":
-    # If NER is expected (.presidio set), prove it actually works at startup and FAIL LOUD if not
-    # -- a silent fall-through to the regex scrubber (empty denylist => no names scrubbed) is the
-    # dangerous failure mode for a privacy tool. The marker is surfaced in `ghost`'s status line.
-    expected = os.path.exists(PRESIDIO_MARKER)
-    active = False
-    if expected:
-        if not _PRESIDIO_OK:
-            _mark_presidio_failed("presidio/spacy import failed")
-        else:
-            try:
-                presidio_scrub.anonymize("warmup")
-                active = True
-                _clear_presidio_failed()
-                log("presidio warm (NER scrubbing active)")
-            except Exception as e:
-                _mark_presidio_failed(f"warmup error: {e}")
-    else:
-        _clear_presidio_failed()  # NER not expected; not a failure
     spend.prune()
-    log(
-        f"bridge up on {LISTEN[0]}:{LISTEN[1]}; "
-        f"{len(DENY)} denylist terms; presidio={'on' if active else ('FAILED' if expected else 'off')}"
-    )
+    log(f"bridge up on {LISTEN[0]}:{LISTEN[1]}")
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()

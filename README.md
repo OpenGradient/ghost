@@ -63,11 +63,10 @@ Set these as environment variables on the install command (`curl ... | GHOST_LOC
 | | |
 |---|---|
 | `GHOST_LOCAL=1` | Also install Ollama and an offline model (6GB), which becomes the fallback. `GHOST_LOCAL_32B=1` adds the stronger 32B (26GB). |
-| `GHOST_SCRUB=1` | Redact your PII and secrets from everything sent. Off by default: requests are sealed either way, and an agent works best seeing what you see. `ghost --scrub` / `--no-scrub` toggles it later. |
 | `GHOST_NO_BROWSER=1` | Skip Chromium and the computer-use driver: a smaller, faster install. |
 | `GHOST_VERBOSE=1` | Show everything the installer runs. Otherwise it's in `~/.ghost/install.log`. |
 
-On Windows, from a clone: `.\install.ps1 -Local -Scrub -NoBrowser`.
+On Windows, from a clone: `.\install.ps1 -Local -NoBrowser`.
 
 An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
 
@@ -128,7 +127,7 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 
 ```
 ghost engine
-  └─ bridge (127.0.0.1:8788)   redaction if it's on, limits and budget, seal to an attested enclave
+  └─ bridge (127.0.0.1:8788)   limits and budget, seal to an attested enclave
        └─ relay (chat-api)       sees your login and IP, but only ciphertext
             └─ TEE enclave       decrypts, runs the model, signs the reply (the bridge checks it)
 ```
@@ -151,4 +150,4 @@ Two boundaries, the same path [dreamfort.ai](https://www.dreamfort.ai) uses: the
 
 ## Security
 
-ghost is a privacy tool; a PII/secret leak is treated as a P0. See [SECURITY.md](SECURITY.md) for how to report one privately.
+ghost is a privacy tool; a leak of your prompts is treated as a P0. See [SECURITY.md](SECURITY.md) for how to report one privately.

@@ -13,7 +13,7 @@ fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
 providers:
-  # Hosted models are reached through ghost's local bridge (scrubbing_proxy.py on :8788), which seals each
+  # Hosted models are reached through ghost's local bridge (privacy/bridge.py on :8788), which seals each
   # request to an attested TEE enclave (OHTTP) and verifies the reply. The api_key here is a placeholder: the
   # bridge uses your own login (`ghost login`).
   opengradient:

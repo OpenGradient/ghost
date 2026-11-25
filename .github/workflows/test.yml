@@ -6,21 +6,15 @@ on:
     branches: [main]
 
 jobs:
-  scrubber-tests:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install deps
-        # click + typer explicit: spacy's `download` CLI is typer/click-based but presidio's
-        # dependency resolution doesn't always pull them, so `spacy download` ModuleNotFound's.
-        run: pip install pytest httpx spacy click typer presidio-analyzer presidio-anonymizer "opengradient-ohttp>=0.1,<0.2"
-      - name: Download spaCy model
-        run: python -m spacy download en_core_web_md
-      - name: Run the tests (incl. golden leak canary)
-        run: pytest tests/ -q
+      - run: pip install pytest httpx "opengradient-ohttp>=0.1,<0.2"
+      - run: pytest tests/ -q
 
   # The real thing: install ghost the way a user does, use it before logging in, and check the engine it built.
   engine:

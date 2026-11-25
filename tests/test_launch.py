@@ -132,19 +132,17 @@ def test_a_dead_bridge_is_reported_and_the_engine_still_runs(box, monkeypatch, c
 def test_status_line(box):
     box.log_in()
     launch.spend._entries.append((time.time(), 0.21))
-    (box.root / "privacy" / ".scrub").touch()
-    assert launch.status_line(HOSTED, []) == ("abliterated-model-large-v2 · sealed to a TEE · DreamFort API key (df_sk_…abcd) · $0.21 in "
-                                              "the last 24h · redaction on, but not of names (reinstall with GHOST_SCRUB=1)")
-    (box.root / "privacy" / ".presidio").touch()
-    assert launch.status_line(HOSTED, []).endswith("redaction on")
+    assert launch.status_line(HOSTED, []) == ("abliterated-model-large-v2 · sealed to a TEE · DreamFort API key (df_sk_…abcd) · "
+                                              "$0.21 in the last 24h")
 
 
-def test_redaction_is_switched_before_the_chat(box):
+@pytest.mark.parametrize("flag", ["--scrub", "--preview"])
+def test_asking_for_redaction_says_it_is_gone(box, capsys, flag):
+    """It was removed; carrying on as if it were still there is the one thing that must not happen."""
     box.log_in()
-    scrub = box.root / "privacy" / ".scrub"
-    assert launch.main(["--scrub", "-z", "hi"]) == 0 and scrub.exists()
-    assert launch.main(["--paths", "--no-scrub"]) == 0 and not scrub.exists()
-    assert box.ran == [["-z", "hi"], []]
+    assert launch.main([flag, "-z", "hi"]) == 2
+    assert "redaction was removed" in capsys.readouterr().err and box.ran == []
+    assert launch.main(["--no-scrub", "--paths", "-z", "hi"]) == 0 and box.ran == [["-z", "hi"]]
 
 
 # ── the offline model ─────────────────────────────────────────────────────────
@@ -220,7 +218,7 @@ def test_bridge_is_started_by_us_where_there_is_no_service_manager(real):
 
 def test_our_own_bridge_process(tmp_path, monkeypatch):
     """The real _start_process, on a stand-in bridge: it must outlive us and leave its output in the log."""
-    (tmp_path / "scrubbing_proxy.py").write_text("import sys, time\nprint('up', flush=True)\ntime.sleep(5)\n")
+    (tmp_path / "bridge.py").write_text("import sys, time\nprint('up', flush=True)\ntime.sleep(5)\n")
     monkeypatch.setattr(launch, "PRIV", tmp_path)
     monkeypatch.setattr(launch, "HOME", tmp_path)
     launch._start_process()

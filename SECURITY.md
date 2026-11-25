@@ -1,8 +1,9 @@
 # Security Policy
 
-ghost is a privacy tool. Its core promise is that your prompts, names, and secrets never reach
-the relay or the TEE enclave in the clear, and that responses are verified before a token is
-emitted. A bug that breaks that promise is the most serious kind of bug here.
+ghost is a privacy tool. Its core promise is that what you send a hosted model is readable only
+inside an attested TEE enclave, never by the relay or anyone else on the way, and that a reply is
+verified before a token of it is shown. A bug that breaks that promise is the most serious kind of
+bug here.
 
 ## Reporting a vulnerability
 
@@ -16,9 +17,10 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
 
 ## What we treat as P0
 
-- **Any PII or secret leak** to the relay or the enclave while redaction is on -- e.g. a request
-  field that is not scrubbed, a placeholder that is de-anonymized into an egress tool -- or the
-  inference route being repointed away from the local bridge.
+- **Anything you send a hosted model leaving this machine unsealed**, or the inference route being
+  repointed away from the local bridge.
+- **Trusting the wrong enclave**: a relay, TEE registry or key taken from anywhere but ghost itself
+  and opengradient-ohttp.
 - **A login leaking** -- your session or API key readable by another user, logged, or sent anywhere
   but DreamFort.
 - **A response accepted without verification** (the verify-before-emit guarantee bypassed).
@@ -27,15 +29,14 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
 
 ## Scope
 
-This repo owns the local harness: the PII/secret scrubber (`privacy/`), the install + service
+This repo owns the local harness: the bridge and the login (`privacy/`), the install and service
 wiring, and the engine fork. The OHTTP/HPKE/TEE protocol and response verification live in
 [opengradient-ohttp](https://github.com/OpenGradient/sdk/tree/main/packages/opengradient-ohttp); report
 issues in that layer there. The underlying agent engine is [Hermes Agent](https://hermes-agent.nousresearch.com).
 
 ## Before you commit
 
-The scrubber's own test suite guards against leak regressions (`pytest tests/`, including the
-golden leak canary). Run it before sending a change that touches `privacy/`.
+Run `pytest tests/` before sending a change that touches `privacy/` or the installers.
 
 The engine is pinned in `engine.pin`. To move it: change both lines there, run
 `scripts/fork-engine.sh` (it stops if a privacy patch no longer applies to the new release), then

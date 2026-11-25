@@ -10,8 +10,6 @@
 # Options, as environment variables. `ghost update` remembers them; set one to 0 to turn it off again.
 #   GHOST_LOCAL=1        also install Ollama and a local model, for `ghost --local` and as the offline fallback
 #   GHOST_LOCAL_32B=1    the stronger 32B local model too (26GB; implies GHOST_LOCAL)
-#   GHOST_SCRUB=1        redact your PII and secrets from everything sent (off by default: requests are sealed
-#                        to the enclave either way, and ghost works best seeing what you see)
 #   GHOST_NO_BROWSER=1   skip Chromium and the computer-use driver (a smaller, faster install)
 #   GHOST_VERBOSE=1      show everything as it runs, instead of keeping it in ~/.ghost/install.log
 set -euo pipefail
@@ -67,8 +65,7 @@ main() {
 # ── options ───────────────────────────────────────────────────────────────────
 options() {
   local name
-  SCRUB_OFF=""; [ "${GHOST_SCRUB-}" != 0 ] || SCRUB_OFF=1   # asked for now, rather than never asked for
-  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_SCRUB GHOST_NO_BROWSER; do
+  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_NO_BROWSER; do
     local value="${!name-$(sed -n "s/^$name=//p" "$GHOST_HOME/.install-env" 2>/dev/null | tail -1)}"
     case "$value" in ""|0) value="" ;; *) value=1 ;; esac
     printf -v "$name" '%s' "$value"
@@ -80,7 +77,7 @@ options() {
 remember() {   # what `ghost update` and `ghost uninstall` need to know
   local name
   echo "$REPO" > "$GHOST_HOME/.src"
-  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_SCRUB GHOST_NO_BROWSER; do
+  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_NO_BROWSER; do
     [ -z "${!name}" ] || echo "$name=1"
   done > "$GHOST_HOME/.install-env"
 }
@@ -185,20 +182,16 @@ check_machine() {
 }
 
 install_bridge() {
-  local extra=()
-  [ -z "$GHOST_SCRUB" ] || extra=(--extra presidio)
-  ( cd "$REPO" && UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" uv sync --python 3.11 --frozen ${extra[@]+"${extra[@]}"} )
+  ( cd "$REPO" && UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" uv sync --python 3.11 --frozen )
   mkdir -p "$PRIV"
-  rm -f "$PRIV/ensure_scrubber_route.py" "$PRIV/.proxy" "$PRIV/.no_scrub" "$PRIV/.pass_paths" "$PRIV/.presidio"   # older releases'
+  if [ -e "$PRIV/.scrub" ]; then   # someone relied on it: say so rather than let them find out
+    NOTES+=("Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first.")
+  fi
+  local old   # older releases'
+  for old in scrubbing_proxy.py presidio_scrub.py scrub_patterns.py ensure_scrubber_route.py \
+             .scrub .no_scrub .full_redaction .presidio .presidio_failed .pass_paths .proxy; do rm -f "$PRIV/$old"; done
   cp "$REPO"/privacy/*.py "$PRIV/"
   cp "$REPO/profile/uncensored_prefill.json" "$PRIV/"
-  [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
-  [ -z "$SCRUB_OFF" ] || rm -f "$PRIV/.scrub"
-  [ -n "$GHOST_SCRUB" ] || return 0   # (what `ghost --scrub` switched on stays on)
-  : > "$PRIV/.scrub"
-  "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md
-  : > "$PRIV/.presidio"
-  NOTES+=("Redaction is on. Add your own terms to $PRIV/pii_denylist.txt")
 }
 
 build_engine() {
@@ -227,7 +220,7 @@ local_model() {
 write_profile() {
   local kept line
   kept="$("$PYTHON" "$REPO/scripts/write_profile.py" "$PROFILE" --ghost-home "$GHOST_HOME" \
-    ${LOCAL_MODEL:+--local-model "$LOCAL_MODEL"} ${GHOST_SCRUB:+--scrub})"
+    ${LOCAL_MODEL:+--local-model "$LOCAL_MODEL"})"
   while IFS= read -r line; do [ -z "$line" ] || NOTES+=("${line/#your/Your}"); done <<< "$kept"
   "$PYTHON" "$REPO/scripts/migrate_skills.py" "$GHOST_HOME" "$PROFILE"
 }
