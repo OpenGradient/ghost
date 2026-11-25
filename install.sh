@@ -54,7 +54,7 @@ main() {
   printf '\n  %s👻 ghost%s\n\n' "$BOLD" "$OFF" >&3
   step "Checking this machine"                                   check_machine
   step "Installing the privacy bridge"                           install_bridge
-  step "Building the engine (Hermes $HERMES_VERSION, a few minutes)" build_engine
+  step "Setting up the engine (Hermes $HERMES_VERSION; a few minutes the first time)" build_engine
   [ -z "$GHOST_LOCAL" ] || step "Getting the local model"        local_model
   step "Writing your profile"                                    write_profile
   step "Starting the background service"                         start_service

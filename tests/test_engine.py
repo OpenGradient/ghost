@@ -43,9 +43,9 @@ pytestmark = pytest.mark.skipif(
     reason="needs the pinned engine (scripts/fork-engine.sh)")
 
 
-def _hosted_profile(home):
-    """The profile as the default (hosted-only) install writes it."""
-    subprocess.run([sys.executable, str(REPO / "scripts" / "write_profile.py"), str(home), "--ghost-home", str(GHOST_HOME)],
+def _write_profile(home, *options):
+    """The profile as the installer writes it: hosted-only by default."""
+    subprocess.run([sys.executable, str(REPO / "scripts" / "write_profile.py"), str(home), "--ghost-home", str(GHOST_HOME), *options],
                    check=True, capture_output=True)
     return home / "config.yaml"
 
@@ -56,7 +56,7 @@ def engine(tmp_path_factory):
     root = tmp_path_factory.mktemp("ghost")
     home = root / "profiles" / "uncensored"
     home.mkdir(parents=True)
-    _hosted_profile(home)
+    _write_profile(home)
     # The engine resolves its runtime from the root of HERMES_HOME, so the throwaway root borrows it.
     for name in ("tools", "installs"):
         try:
@@ -172,19 +172,33 @@ def test_every_route_is_served_by_the_bridge(profile):
     assert served and set(routes) - served == set()
 
 
+WINDOW = ("from run_agent import AIAgent\nfrom hermes_cli.runtime_provider import resolve_runtime_provider\n"
+          "def window(model, provider):\n"
+          "    r = resolve_runtime_provider(requested=provider)\n"
+          "    a = AIAgent(model=model, provider=r['provider'], base_url=r['base_url'], api_key=r['api_key'],\n"
+          "                quiet_mode=True, enabled_toolsets=['file'], skip_context_files=True, skip_memory=True)\n"
+          "    return a.context_compressor.context_length\n")
+
+
 def test_context_windows(engine, profile):
-    """Hosted models keep their full window, compression can read all of it (with a smaller window the
-    engine shrinks the chat's to match), and the engine accepts the local model (it wants >= 64K)."""
-    out = engine("from run_agent import AIAgent\nfrom hermes_cli.runtime_provider import resolve_runtime_provider\n"
-                 "def window(model, provider):\n"
-                 "    r = resolve_runtime_provider(requested=provider)\n"
-                 "    a = AIAgent(model=model, provider=r['provider'], base_url=r['base_url'], api_key=r['api_key'],\n"
-                 "                quiet_mode=True, enabled_toolsets=['file'], skip_context_files=True, skip_memory=True)\n"
-                 "    return a.context_compressor.context_length\n"
-                 f"out = [window({profile['model']['default']!r}, 'opengradient'),"
-                 f" window({profile['auxiliary']['compression']['model']!r}, 'opengradient'),"
-                 " window('nous/hermes-4-405b', 'opengradient'), window('ghost-tool:latest', 'ollama-local')]")
-    assert out == [1048576, 1048576, 131072, 65536]
+    """Hosted models keep their full window, and compression can read all of it (with a smaller window the
+    engine shrinks the chat's to match)."""
+    out = engine(WINDOW + f"out = [window({profile['model']['default']!r}, 'opengradient'),"
+                 f" window({profile['auxiliary']['compression']['model']!r}, 'opengradient'), window('nous/hermes-4-405b', 'opengradient')]")
+    assert out == [1048576, 1048576, 131072]
+
+
+def test_the_engine_accepts_the_local_model(engine):
+    """It wants a window of at least 64K. (Installed with GHOST_LOCAL.)"""
+    home = engine.home.parent / "local"
+    _write_profile(home, "--local-model", "ghost-tool:latest")
+    assert engine(WINDOW + "out = window('ghost-tool:latest', 'ollama-local')", home=home) == 65536
+
+
+def test_model_picker_offers_what_the_bridge_serves(engine):
+    """And no local provider, unless ghost was installed with one."""
+    out = engine("from hermes_cli.config import load_config\nout = sorted(load_config()['providers'])")
+    assert out == ["opengradient"]
 
 
 # ── no phone-home ─────────────────────────────────────────────────────────────

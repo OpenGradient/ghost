@@ -87,7 +87,7 @@ Copy-Item "$Repo\privacy\*.py" $Priv -Force
 Copy-Item "$Repo\profile\uncensored_prefill.json" $Priv -Force
 
 # --- 3. the engine ---------------------------------------------------------------------------
-Say "Building the engine (a few minutes)"
+Say "Setting up the engine (a few minutes the first time)"
 & powershell -ExecutionPolicy Bypass -NoProfile -File "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome
 Check "building the engine"
 

@@ -4,7 +4,8 @@
 # runtime under ~\.ghost with the engine's own package manager. A normie `hermes` install is neither
 # needed nor touched.
 #
-#   fork-engine.ps1                   build the engine (the previous one is restored if it fails)
+#   fork-engine.ps1                   build the engine, unless the one there is already this build
+#                                     (the previous one is restored if it fails)
 #   fork-engine.ps1 -Check            fail if ghost is open, so nothing changes under a live session
 #   fork-engine.ps1 -RefreshGateway   point an installed background gateway at this engine
 param(
@@ -20,6 +21,7 @@ $RepoUrl = "https://github.com/NousResearch/hermes-agent.git"
 $New = "$Eng.new"; $Old = "$Eng.old"
 $BinDir = Join-Path $Eng ".hermes\bin"
 $Restart = "$GhostHome\.restart-gateway"   # present while a gateway this script stopped is owed a start
+$Refresh = "$GhostHome\.refresh-gateway"   # present while an installed gateway still points at the previous engine
 
 # The engine's package manager must see only its own toolchain, not ghost's privacy venv.
 foreach ($v in "UV_PROJECT_ENVIRONMENT","VIRTUAL_ENV","PYTHONHOME","PYTHONPATH","HERMES_RUNTIME_DIR",
@@ -69,17 +71,28 @@ function Assert-Closed {
 }
 function Get-GatewayTask { Get-ScheduledTask -TaskName "Hermes_Gateway_uncensored" -ErrorAction SilentlyContinue }
 
+# What this build is made from. The engine there is current if it was made from the same, and still launches.
+$made = (@("..\engine.pin", "debrand.py", "fork-engine.ps1") | ForEach-Object { [IO.File]::ReadAllText((Join-Path $here $_)) }) -join ""
+$Recipe = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($made + $env:GHOST_NO_BROWSER)))).Hash
+function Test-Current {
+  if ($env:GHOST_FORCE -or -not (Test-Path "$Eng\.ghost-recipe")) { return $false }
+  return ([IO.File]::ReadAllText("$Eng\.ghost-recipe").Trim() -eq $Recipe) -and (Test-Launches)
+}
+
 if ($Check) { Assert-Closed; return }
 if ($RefreshGateway) {
-  if ((Get-GatewayTask) -and (Launcher)) {
+  if (-not (Test-Path $Refresh)) { return }
+  if (-not (Get-GatewayTask)) { Remove-Item $Refresh; return }
+  if (Launcher) {
     Write-Host "==> moving the background gateway onto the new engine"
     $start = if (Test-Path $Restart) { "--start-now" } else { "--no-start-now" }   # one you had stopped stays stopped
     Invoke-Engine @("gateway","install","--force",$start,"--start-on-login")
-    if ($LASTEXITCODE -eq 0) { Remove-Item $Restart -ErrorAction SilentlyContinue }
+    if ($LASTEXITCODE -eq 0) { Remove-Item $Restart, $Refresh -ErrorAction SilentlyContinue }
     else { Write-Host "   (could not refresh it -- run: ghost gateway install --force)" }
   }
   return
 }
+if (Test-Current) { Write-Host "==> the engine is already this build: $Eng"; exit 0 }
 Assert-Closed
 
 # ---------- 1. fetch ----------
@@ -190,6 +203,8 @@ sys.exit(0 if ensure_install_launchers(root, root / ".hermes" / "bin") else "cou
   throw
 }
 
+New-Item -ItemType File -Force -Path $Refresh | Out-Null
+[IO.File]::WriteAllText("$Eng\.ghost-recipe", $Recipe)
 if (Test-Path $Old) { Remove-Item -Recurse -Force $Old -ErrorAction SilentlyContinue }
 Write-Host "==> engine ready: $Eng"
 exit 0

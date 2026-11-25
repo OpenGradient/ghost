@@ -150,6 +150,9 @@ def test_local_contacts_nobody(box, monkeypatch, capsys):
     monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "ghost-tool:latest  6GB", ""))
     assert launch.main(["--local", "-z", "hi"]) == 0
     assert box.ran == [["-m", "ghost-tool:latest", "--provider", "ollama-local", "-z", "hi"]] and box.started == []
+    box.configure(HOSTED[:HOSTED.index("  ollama-local:")])   # Ollama is there, but ghost wasn't installed with it
+    assert launch.main(["--local"]) == 1 and "no local model installed" in capsys.readouterr().err
+    box.configure(HOSTED)
     monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     assert launch.main(["--local"]) == 1 and "no local model installed" in capsys.readouterr().err
 

@@ -2,6 +2,7 @@
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -179,6 +180,50 @@ def test_gateway_does_not_count_as_open(box, shape):
     assert box.run(src=box.source("one")).returncode == 0
     box.process(shape, "--profile", "uncensored", "gateway", "run")
     assert box.run("--check").returncode == 0
+
+
+@pytest.fixture
+def released(box):
+    """As users build it: fetched at the pinned commit (a stand-in `git` clones a local tree)."""
+    commit = re.search(r"(?m)^HERMES_COMMIT=(\S+)$", (REPO / "engine.pin").read_text()).group(1)
+    (box.bin / "git").write_text(f'''#!/bin/sh
+for last; do :; done
+case "$*" in
+  *clone*) echo clone >> "{box.root}/fetched"; cp -R "{box.root}/upstream" "$last" ;;
+  *rev-parse*) echo {commit} ;;
+  *) exec {shutil.which("git")} "$@" ;;
+esac
+''')
+    (box.bin / "git").chmod(0o755)
+    box.source("upstream")
+    box.fetched = lambda: len((box.root / "fetched").read_text().split()) if (box.root / "fetched").exists() else 0
+    return box
+
+
+def test_an_engine_that_is_current_is_not_built_again(released):
+    assert released.run().returncode == 0 and released.fetched() == 1
+    done = released.run()
+    assert done.returncode == 0 and "already this build" in done.stdout and released.fetched() == 1
+
+
+@pytest.mark.parametrize("change", ["forced", "options", "recipe", "broken"])
+def test_anything_else_is(released, change):
+    assert released.run(GHOST_NO_BROWSER="1").returncode == 0
+    if change == "recipe":   # engine.pin, debrand.py or the builder moved on
+        (released.engine / ".ghost-recipe").write_text("another\n")
+    if change == "broken":
+        (released.engine / ".hermes" / "bin" / "hermes").write_text("#!/bin/sh\nexit 1\n")
+    env = {} if change == "options" else {"GHOST_NO_BROWSER": "1", **({"GHOST_FORCE": "1"} if change == "forced" else {})}
+    assert released.run(**env).returncode == 0 and released.fetched() == 2
+
+
+def test_a_current_engine_leaves_the_gateway_alone(released):
+    assert released.run().returncode == 0
+    released.service(running=True)
+    assert released.run("--refresh-gateway").returncode == 0   # for the build just made
+    before = released.calls()
+    assert released.run().returncode == 0 and released.run("--refresh-gateway").returncode == 0
+    assert [c for c in released.calls()[len(before):] if c != "--version"] == []
 
 
 def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):

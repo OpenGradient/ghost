@@ -17,7 +17,7 @@ import random
 import threading
 import time
 import warnings
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import httpx
 from opengradient_ohttp import OHTTPTransport, TeeVerificationError
@@ -25,6 +25,7 @@ from opengradient_ohttp import OHTTPTransport, TeeVerificationError
 import ghost_auth
 import spend
 from ghost_auth import AuthError
+from localhttp import LocalServer
 
 # The enclave signs a fixed set of request fields; the client warns about each other one it leaves out.
 warnings.filterwarnings("ignore", message="opengradient-ohttp: ")
@@ -519,4 +520,4 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     spend.prune()
     log(f"bridge up on {LISTEN[0]}:{LISTEN[1]}")
-    ThreadingHTTPServer(LISTEN, Handler).serve_forever()
+    LocalServer(LISTEN, Handler).serve_forever()

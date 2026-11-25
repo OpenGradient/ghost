@@ -6,7 +6,8 @@
 # the engine's own package manager. Result: a self-contained engine that `ghost` runs on. A normie
 # `hermes` install is neither needed nor touched.
 #
-#   fork-engine.sh                    build the engine (the previous one is restored if it fails)
+#   fork-engine.sh                    build the engine, unless the one there is already this build
+#                                     (the previous one is restored if it fails)
 #   fork-engine.sh --check            fail if ghost is open, so nothing changes under a live session
 #   fork-engine.sh --refresh-gateway  point an installed background gateway at this engine
 #
@@ -15,7 +16,7 @@
 #   GHOST_HOME=         ghost's state + managed runtime   (default ~/.ghost)
 #   GHOST_PYTHON=       a Python 3.9+ to run debrand.py   (default python3)
 #   GHOST_NO_BROWSER=1  skip Chromium and the computer-use driver
-#   GHOST_FORCE=1       replace the engine even while ghost is open
+#   GHOST_FORCE=1       build the engine even if it's current, and even while ghost is open
 #   HERMES_SRC=         build from a local Hermes tree instead of the pin (development)
 set -euo pipefail
 
@@ -27,6 +28,7 @@ REPO_URL="https://github.com/NousResearch/hermes-agent.git"
 NEW="$ENG.new"; OLD="$ENG.old"
 LAUNCH="$ENG/.hermes/bin/hermes"
 RESTART="$GHOST_HOME/.restart-gateway"   # present while a gateway this script stopped is owed a start
+REFRESH="$GHOST_HOME/.refresh-gateway"   # present while an installed gateway still points at the previous engine
 # The background gateway, when it's installed as a service.
 case "$(uname -s)" in
   Darwin) UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
@@ -63,19 +65,28 @@ check_closed() {
   return 1
 }
 
+# What this build is made from. The engine there is current if it was made from the same, and still launches.
+RECIPE="$(cat "$HERE/../engine.pin" "$HERE/debrand.py" "$HERE/fork-engine.sh" | git hash-object --stdin)${GHOST_NO_BROWSER:+-no-browser}"
+launches() { HERMES_HOME="$GHOST_HOME/profiles/uncensored" "$LAUNCH" --version </dev/null; }
+current() {
+  [ -z "${GHOST_FORCE:-}${HERMES_SRC:-}" ] && [ "$(cat "$ENG/.ghost-recipe" 2>/dev/null)" = "$RECIPE" ] && launches >/dev/null 2>&1
+}
+
 case "${1:-}" in
   --check) check_closed; exit ;;
   --refresh-gateway)
-    service_installed || exit 0
+    [ -e "$REFRESH" ] || exit 0
+    service_installed || { rm -f "$REFRESH"; exit 0; }
     echo "==> moving the background gateway onto the new engine"
     start=--no-start-now; [ ! -e "$RESTART" ] || start=--start-now   # one you had stopped stays stopped
     if HERMES_HOME="$GHOST_HOME" "$LAUNCH" -p uncensored gateway install --force "$start" --start-on-login </dev/null
-    then rm -f "$RESTART"
+    then rm -f "$RESTART" "$REFRESH"
     else echo "   (could not refresh it -- run: ghost gateway install --force)"; fi
     exit 0 ;;
   "") ;;
   *) echo "usage: fork-engine.sh [--check | --refresh-gateway]" >&2; exit 2 ;;
 esac
+if current; then echo "==> the engine is already this build: $ENG"; exit 0; fi
 check_closed
 
 # ---------- 1. fetch ----------
@@ -130,7 +141,6 @@ STAMP
 
 # ---------- 3. stop the background gateway, then swap the trees ----------
 # A build that was killed part-way left the engine it was replacing set aside: put that one back first.
-launches() { HERMES_HOME="$GHOST_HOME/profiles/uncensored" "$LAUNCH" --version </dev/null; }
 if [ -d "$OLD" ] && ! launches >/dev/null 2>&1; then rm -rf "$ENG"; mv "$OLD" "$ENG"; fi
 rm -rf "$OLD"
 
@@ -182,6 +192,8 @@ case "$VERSION" in
 esac
 
 trap - EXIT
+: > "$REFRESH"
+[ -n "${HERMES_SRC:-}" ] || echo "$RECIPE" > "$ENG/.ghost-recipe"
 rm -rf "$OLD"
 pm gc >/dev/null 2>&1 || true   # drop dependency generations nothing uses any more
 echo "==> engine ready: $ENG"
