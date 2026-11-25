@@ -183,6 +183,16 @@ def test_refusals_are_passed_on(enclave, bridge, failure, status, words):
     assert got[0] == status and words in got[1] and enclave.accepted == []
 
 
+def test_a_busy_relay_is_waited_out(monkeypatch, enclave, bridge):
+    """It limits requests per minute, and a request it turned away was never accepted."""
+    waits = []
+    monkeypatch.setattr(sp, "_wait", waits.append)
+    enclave.replies = [httpx.Response(429, json={"error": "Rate limit exceeded: 40 per 1 minute"})] * 3 + [sse(text("hi"), closing())]
+    assert bridge()[0] == 200 and len(enclave.accepted) == 1 and waits == [5, 10, 20]
+    enclave.replies, enclave.seen, waits[:] = [httpx.Response(429, json={"error": "Rate limit exceeded"})], 0, []
+    assert bridge() == (429, "Rate limit exceeded") and waits == list(sp._BUSY_WAITS) and enclave.seen == 5
+
+
 def test_not_logged_in_fails_at_once(monkeypatch, enclave, bridge):
     def nobody():
         raise sp.AuthError(sp.ghost_auth.NOT_LOGGED_IN)
