@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ghost-uninstall -- remove ghost from this machine (`ghost uninstall`).
+#
+#   ghost uninstall             ask first, and keep your chats, skills and settings unless you say otherwise
+#   ghost uninstall --yes       don't ask (your data is kept)
+#   ghost uninstall --purge     delete your data too
+set -uo pipefail
+
+GHOST_HOME="__GHOST_HOME__"
+ENG="__ENG__"
+BIN="$HOME/.local/bin"
+SRC="$(cat "$GHOST_HOME/.src" 2>/dev/null || true)"
+
+YES="" PURGE=""
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y) YES=1 ;;
+    --purge)  PURGE=1 ;;
+    *) echo "usage: ghost uninstall [--yes] [--purge]" >&2; exit 2 ;;
+  esac
+done
+
+ask() {   # ask "question": true on yes; false on no, Enter or no terminal
+  local answer=""
+  [ -t 0 ] || return 1
+  printf '%s [y/N] ' "$1"; read -r answer || true
+  case "$answer" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Only ever delete directories that are unmistakably ghost's.
+ours_engine() {
+  grep -q '"distribution": "ghost"' "$1/install-stamp.json" 2>/dev/null \
+    || { [ -x "$1/venv/bin/hermes" ] && grep -qs 'Ghost v' "$1/hermes_cli/banner.py" "$1/hermes_cli/main.py"; }
+}
+ours_home() { [ -f "$1/.src" ] && [ -d "$1/privacy" ]; }
+
+if ! ours_home "$GHOST_HOME"; then
+  echo "ghost isn't installed here ($GHOST_HOME)."
+  exit 0
+fi
+
+echo "This removes ghost: its engine ($ENG), background services and commands."
+if [ -z "$YES" ]; then
+  ask "Remove ghost?" || { echo "Nothing was changed."; exit 0; }
+  [ -n "$PURGE" ] || ! ask "Also delete your chats, skills, settings and login?" || PURGE=1
+fi
+
+echo "Stopping ghost"
+if [ -x "$ENG/.hermes/bin/hermes" ]; then
+  HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway stop </dev/null >/dev/null 2>&1
+  UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
+  [ -f "$UNIT" ] || UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
+  if [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; then
+    HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway uninstall </dev/null >/dev/null 2>&1
+  fi
+fi
+if [ "$(uname -s)" = Darwin ]; then
+  for label in ai.dreamfort.ghost com.advait.hermes-pii-scrubber com.advait.hermes-veil; do
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    [ -f "$plist" ] || continue
+    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || launchctl unload "$plist" >/dev/null 2>&1
+    rm -f "$plist"
+  done
+else
+  for unit in ghost-bridge ghost-scrubber ghost-veil; do
+    systemctl --user disable --now "$unit.service" >/dev/null 2>&1
+    rm -f "$HOME/.config/systemd/user/$unit.service"
+  done
+  systemctl --user daemon-reload >/dev/null 2>&1
+fi
+# One `ghost` started itself, where there is no service manager.
+pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p')"
+[ -z "$pid" ] || kill "$pid" 2>/dev/null
+
+echo "Removing files"
+for dir in "$ENG" "$ENG.old" "$ENG.new"; do
+  if [ -d "$dir" ]; then
+    if ours_engine "$dir"; then rm -rf "$dir"; else echo "   left $dir (not an engine ghost built)"; fi
+  fi
+done
+for name in ghost ghost-login ghost-update; do
+  if grep -qsF "$GHOST_HOME" "$BIN/$name"; then rm -f "$BIN/$name"; fi
+done
+if [ "$SRC" = "$HOME/.ghost-src" ] && [ -d "$SRC/.git" ]; then
+  if [ -z "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then rm -rf "$SRC"; else echo "   left $SRC (it has changes of yours)"; fi
+fi
+if [ -n "$PURGE" ]; then
+  rm -f "${OG_VEIL_HOME:-$HOME/.opengradient/veil}/session.json"
+  rm -rf "$GHOST_HOME"
+  echo "ghost and all of its data are gone."
+else
+  for dir in venv tools installs cache privacy; do rm -rf "${GHOST_HOME:?}/$dir"; done
+  rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/install.log"
+  echo "ghost is gone. Your chats, skills and settings are still in $GHOST_HOME (delete it to remove them too)."
+fi
+rm -f "$BIN/ghost-uninstall"

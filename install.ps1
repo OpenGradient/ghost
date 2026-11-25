@@ -1,186 +1,152 @@
-# ============================================================================
-# ghost -- native Windows installer (PowerShell). The macOS/Linux path is install.sh.
-# ============================================================================
-# One command, deterministic, no LLM:
+# ghost -- the installer and updater for Windows (PowerShell). On macOS, Linux and WSL2: install.sh. Safe to re-run.
+#
 #   irm https://raw.githubusercontent.com/OpenGradient/ghost/main/install.ps1 | iex
-# From a clone:  powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
-# EXPERIMENTAL: CI builds the engine on Windows, but the privacy services below (Task Scheduler) have
-# only been authored, not run on a real Windows box. Please report failures. The mac/linux install.sh
-# is unaffected.
+# From a clone:  powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Local] [-Scrub] [-NoBrowser]
 #
-# Options (env vars or switches): -Local (offline model), -Scrub (outbound PII/secret redaction).
-# ============================================================================
-param([switch]$Local, [switch]$Scrub)
+# Sets up the engine (the Hermes release pinned in engine.pin, debranded, with its own runtime), the local
+# bridge that seals requests to the TEE gateway, and the `ghost` commands. It contacts no model and needs no
+# login: ghost asks you to log in the first time you run it. No administrator rights needed.
+#
+# Options: -Local (an offline model too; needs Ollama), -Scrub (redact PII and secrets from everything sent),
+# -NoBrowser (skip Chromium and the computer-use driver). `ghost update` remembers them.
+param([switch]$Local, [switch]$Scrub, [switch]$NoBrowser)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$GhostHome = "$env:USERPROFILE\.ghost"
+$GhostHome  = "$env:USERPROFILE\.ghost"
+$Eng        = "$env:USERPROFILE\.ghost-engine"
 $ProfileDir = "$GhostHome\profiles\uncensored"
-$Priv      = "$GhostHome\privacy"
-$Eng       = "$env:USERPROFILE\.ghost-engine"
-$BinDir    = "$env:USERPROFILE\.local\bin"
-$Venv      = "$GhostHome\venv"
+$Priv       = "$GhostHome\privacy"
+$Venv       = "$GhostHome\venv"
+$Py         = "$Venv\Scripts\python.exe"
+$BinDir     = "$env:USERPROFILE\.local\bin"
 function Say($m) { Write-Host "`n==> $m" -ForegroundColor Yellow }
 function Have($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
+function Write-Text($path, $text) { [IO.File]::WriteAllText($path, $text) }   # no byte-order mark, unlike Set-Content
+function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" } }
 
-# --- self-bootstrap: run via `irm | iex` (no checkout) -> clone + re-exec ------------------
-$RepoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { "" }
-if (-not $RepoRoot -or -not (Test-Path "$RepoRoot\profile\config.yaml")) {
-  if (-not (Have git)) { throw "ghost needs git. Install Git for Windows, then re-run." }
+# Run as `irm | iex` there is no checkout: get one, and carry on from there.
+$Repo = if ($PSScriptRoot) { $PSScriptRoot } else { "" }
+if (-not $Repo -or -not (Test-Path "$Repo\profile\config.yaml")) {
+  if (-not (Have git)) { throw "ghost needs git: install Git for Windows (https://git-scm.com/download/win), then run this again." }
   $Src = "$env:USERPROFILE\.ghost-src"
-  if (Test-Path "$Src\.git") { Say "Updating ghost source ($Src)"; git -C $Src pull --ff-only }
-  else { Say "Fetching ghost into $Src"; if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }; git clone https://github.com/OpenGradient/ghost.git $Src }
+  if (Test-Path "$Src\.git") {   # always the released branch, whatever was checked out before
+    git -C $Src fetch --quiet origin main; Check "git fetch"
+    git -C $Src checkout --quiet main; Check "git checkout (does $Src have changes of yours in it?)"
+    git -C $Src merge --quiet --ff-only origin/main; Check "git merge (does $Src have changes of yours in it?)"
+  } else {
+    if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
+    git clone --quiet https://github.com/OpenGradient/ghost.git $Src; Check "git clone"
+  }
   & powershell -ExecutionPolicy Bypass -NoProfile -File "$Src\install.ps1" @PSBoundParameters
   exit $LASTEXITCODE
 }
 
-# Record source + options so `ghost update` can re-run the same way.
-New-Item -ItemType Directory -Force -Path $GhostHome | Out-Null
-Set-Content -Path "$GhostHome\.src" -Value $RepoRoot -Encoding UTF8
-$envLines = @(); if ($Local) { $envLines += "GHOST_LOCAL=1" }; if ($Scrub) { $envLines += "GHOST_SCRUB=1" }
-Set-Content -Path "$GhostHome\.install-env" -Value ($envLines -join "`n") -Encoding UTF8
+# --- options: what was asked for now, or last time -------------------------------------------
+$saved = if (Test-Path "$GhostHome\.install-env") { [IO.File]::ReadAllText("$GhostHome\.install-env") } else { "" }
+function Option($switch, $name) {
+  if ($switch) { return $true }
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ($null -ne $value) { return $value -notin "", "0" }
+  return $saved -match "(?m)^$name=1"
+}
+$Local = Option $Local "GHOST_LOCAL"; $Scrub = Option $Scrub "GHOST_SCRUB"; $NoBrowser = Option $NoBrowser "GHOST_NO_BROWSER"
+if ($NoBrowser) { $env:GHOST_NO_BROWSER = "1" } else { Remove-Item Env:GHOST_NO_BROWSER -ErrorAction SilentlyContinue }
 
-# Nothing below runs while a ghost window is open: it would be left on a half-replaced engine.
-& "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Check
+# --- 1. this machine -------------------------------------------------------------------------
+Say "Checking this machine"
+& "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Check   # nothing changes under an open ghost
+if (-not (Have uv)) { Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression; $env:Path = "$BinDir;$env:Path" }
+if (-not (Have uv)) { throw "couldn't install uv. Install it from https://docs.astral.sh/uv/, then run this again." }
+if ($Local -and -not (Have ollama)) { throw "-Local needs Ollama: install it from https://ollama.com, then run this again." }
+New-Item -ItemType Directory -Force -Path $GhostHome, $Priv, $BinDir | Out-Null
+Write-Text "$GhostHome\.src" $Repo
+$chosen = @(); if ($Local) { $chosen += "GHOST_LOCAL=1" }; if ($Scrub) { $chosen += "GHOST_SCRUB=1" }; if ($NoBrowser) { $chosen += "GHOST_NO_BROWSER=1" }
+Write-Text "$GhostHome\.install-env" (($chosen | ForEach-Object { "$_`n" }) -join "")
 
-# --- 0. dependencies: uv (provisions Python 3.11 for the privacy stack) --------------------
-Say "Dependencies"
-if (-not (Have uv)) { Say "Installing uv (Astral's Python manager)"; irm https://astral.sh/uv/install.ps1 | iex; $env:Path = "$env:USERPROFILE\.local\bin;$env:Path" }
-if (-not (Have uv)) { throw "uv install failed; install it from https://docs.astral.sh/uv/ and re-run." }
+# --- 2. the bridge ---------------------------------------------------------------------------
+Say "Installing the privacy bridge"
+# Windows won't replace the files of a program that is running.
+foreach ($task in "ghost-bridge", "ghost-scrubber", "ghost-veil") { Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue | Where-Object {
+  $_.CommandLine -and ($_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }   # older releases'
 
-# --- 1. the engine (pinned Hermes release, debranded) --------------------------------------
-Say "Building the engine -> $Eng"
-& powershell -ExecutionPolicy Bypass -NoProfile -File "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome
-if ($LASTEXITCODE -ne 0) { throw "fork-engine.ps1 failed" }
-
-# --- 2. privacy stack: isolated uv venv (Python 3.11) --------------------------------------
-Say "Privacy stack (isolated uv venv, Python 3.11)"
-New-Item -ItemType Directory -Force -Path $Priv | Out-Null
 $env:UV_PROJECT_ENVIRONMENT = $Venv
-$extra = @(); if ($Scrub) { $extra = @("--extra","presidio") }
-Push-Location $RepoRoot
-try { & uv sync --python 3.11 --frozen @extra } catch { & uv sync --python 3.11 @extra }
-finally { Pop-Location }
-$Py  = "$Venv\Scripts\python.exe"
+$extra = @(); if ($Scrub) { $extra = @("--extra", "presidio") }
+Push-Location $Repo
+try { & uv sync --quiet --python 3.11 --frozen @extra; Check "uv sync" } finally { Pop-Location }
+Remove-Item Env:UV_PROJECT_ENVIRONMENT
+foreach ($old in "ensure_scrubber_route.py", ".proxy", ".no_scrub", ".pass_paths", ".presidio") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }
+Copy-Item "$Repo\privacy\*.py" $Priv -Force
+Copy-Item "$Repo\profile\uncensored_prefill.json" $Priv -Force
+if (-not (Test-Path "$Priv\pii_denylist.txt")) { Copy-Item "$Repo\profile\pii_denylist.example.txt" "$Priv\pii_denylist.txt" }
+if ($Scrub) {
+  Write-Text "$Priv\.scrub" ""
+  & $Py -m spacy download en_core_web_md; Check "downloading the name detector"
+  Write-Text "$Priv\.presidio" ""
+} elseif ($env:GHOST_SCRUB -eq "0") { Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue }   # what `ghost --scrub` switched on stays on
+
+# --- 3. the engine ---------------------------------------------------------------------------
+Say "Building the engine (a few minutes)"
+& powershell -ExecutionPolicy Bypass -NoProfile -File "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome
+Check "building the engine"
+
+# --- 4. the local model (-Local) -------------------------------------------------------------
+$LocalModel = ""
+if ($Local) {
+  Say "Getting the local model"
+  foreach ($line in [IO.File]::ReadAllLines("$Repo\models.txt")) {
+    if ($line -match '^\s*(#|$)') { continue }
+    $source, $alias, $need = $line -split "`t"
+    if ($need -eq "optional") { continue }
+    & ollama pull $source; Check "ollama pull"
+    # The engine refuses a window under 64K for tool use, and Ollama's own default is far smaller.
+    $modelfile = Join-Path ([IO.Path]::GetTempPath()) "ghost-modelfile-$PID"
+    Write-Text $modelfile "FROM $source`nPARAMETER num_ctx 65536`n"
+    & ollama create $alias -f $modelfile; Check "ollama create"
+    Remove-Item $modelfile
+    $LocalModel = "${alias}:latest"
+  }
+}
+
+# --- 5. the profile --------------------------------------------------------------------------
+Say "Writing your profile"
+$flags = @(); if ($LocalModel) { $flags += @("--local-model", $LocalModel) }; if ($Scrub) { $flags += "--scrub" }
+& $Py "$Repo\scripts\write_profile.py" $ProfileDir --ghost-home $GhostHome @flags; Check "writing the profile"
+& $Py "$Repo\scripts\migrate_skills.py" $GhostHome $ProfileDir; Check "moving your skills"
+
+# --- 6. the background service ---------------------------------------------------------------
+Say "Starting the background service"
 $Pyw = "$Venv\Scripts\pythonw.exe"; if (-not (Test-Path $Pyw)) { $Pyw = $Py }
-if (-not (Test-Path $Py)) { throw "privacy venv not created at $Py" }
-Copy-Item "$RepoRoot\privacy\*.py" $Priv -Force
+try {
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $task = @{
+    TaskName  = "ghost-bridge"
+    Action    = New-ScheduledTaskAction -Execute $Pyw -Argument "-Es `"$Priv\scrubbing_proxy.py`""
+    Trigger   = New-ScheduledTaskTrigger -AtLogOn -User $me   # for anyone's logon it would need an administrator
+    Principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
+    Settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 `
+      -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+  }
+  Register-ScheduledTask @task -Force | Out-Null
+} catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." }
+& $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())" $Priv
+if ($LASTEXITCODE -ne 0) { throw "the background service didn't start. Its log is $Priv\scrubber.log" }
 
-# --- 3. uncensored profile -----------------------------------------------------------------
-Say "Writing the uncensored profile"
-New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
-foreach ($f in "config.yaml","SOUL.md") { if (Test-Path "$ProfileDir\$f") { Copy-Item "$ProfileDir\$f" "$ProfileDir\.$f.was" -Force } }
-$LocalModel = "ghost-tool:latest"
-$homeFwd = ($env:USERPROFILE -replace '\\','/')
-(Get-Content -Raw -Encoding UTF8 "$RepoRoot\profile\config.yaml") -replace '__HOME__',$homeFwd -replace '__LOCAL_MODEL__',$LocalModel |
-  Set-Content -NoNewline -Encoding UTF8 "$ProfileDir\config.yaml"
-Copy-Item "$RepoRoot\profile\SOUL.md" "$ProfileDir\SOUL.md" -Force
-if (-not (Test-Path "$ProfileDir\.env")) { Copy-Item "$RepoRoot\profile\.env.example" "$ProfileDir\.env" -Force }
-& $Py "$RepoRoot\scripts\migrate_skills.py" $GhostHome $ProfileDir
-if (-not $Local) {
-  # hosted-only: route auxiliary + fallback to hosted models (mirrors install.sh)
-  $hosted = @'
-import sys, re
-p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-s = re.sub(r"provider: ollama-local\n(\s*)model: \S+", r"provider: opengradient\n\1model: abliteration/deepseek-v4.1-flash-abliterated", s)
-s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local", r"model: abliteration/deepseek-v4.1-flash-abliterated\n\1provider: opengradient", s)
-s = s.replace("provider: ollama-local", "provider: opengradient")
-s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )abliteration/deepseek-v4.1-flash-abliterated", r"\g<1>nous/hermes-4-405b", s, count=1)
-open(p, "w", encoding="utf-8").write(s); print("   hosted-only: fallback -> 405b, auxiliary -> deepseek-v4.1-flash-abliterated (via og-veil)")
-'@
-  $hosted | & $Py - "$ProfileDir\config.yaml"   # python reads its script from stdin
+# --- 7. the commands -------------------------------------------------------------------------
+Say "Installing the ghost command"
+foreach ($name in "ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1", "ghost-uninstall.cmd", "ghost-uninstall.ps1") {
+  $text = [IO.File]::ReadAllText("$Repo\bin\windows\$name").Replace("__PYTHON__", $Py).Replace("__GHOST_HOME__", $GhostHome).Replace("__ENG__", $Eng)
+  Write-Text "$BinDir\$name" ($text -replace "`r?`n", "`r`n")   # cmd misreads labels in files with bare newlines
 }
-# redaction markers (off by default)
-if (-not (Test-Path "$Priv\pii_denylist.txt")) { Copy-Item "$RepoRoot\profile\pii_denylist.example.txt" "$Priv\pii_denylist.txt" -Force }
-Copy-Item "$RepoRoot\profile\uncensored_prefill.json" "$Priv\uncensored_prefill.json" -Force
-Remove-Item "$Priv\.proxy","$Priv\.no_scrub" -ErrorAction SilentlyContinue
-if ($Scrub) {
-  Set-Content -Path "$Priv\.scrub" -Value "" -Encoding UTF8
-  @'
-import sys, re
-p = sys.argv[1]; s = open(p, encoding="utf-8-sig").read()
-s = re.sub(r"(?m)^  redact_secrets: false$", "  redact_secrets: true", s)
-s = re.sub(r"(?m)^  redact_pii: false$", "  redact_pii: true", s)
-open(p, "w", encoding="utf-8").write(s)
-'@ | & $Py - "$ProfileDir\config.yaml"
-  Say "Outbound PII + secret redaction ON (-Scrub)"
-} else {
-  Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue
-  Say "Full-fidelity mode (default) -- no outbound redaction. Use -Scrub to enable."
-}
-if ($Scrub) {
-  & $Py -m spacy download en_core_web_md 2>$null
-  & $Py -c "import en_core_web_md" 2>$null
-  if ($LASTEXITCODE -eq 0) { Set-Content "$Priv\.presidio" "" -Encoding ascii }
-}
+& "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -RefreshGateway
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ("$userPath" -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("Path", "$BinDir;$userPath", "User") }
 
-# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
-foreach ($f in "config.yaml","SOUL.md") {
-  if (-not (Test-Path "$ProfileDir\.$f.was")) { continue }
-  if ((Get-FileHash "$ProfileDir\.$f.was").Hash -eq (Get-FileHash "$ProfileDir\$f").Hash) { Remove-Item "$ProfileDir\.$f.was" }
-  else { Move-Item -Force "$ProfileDir\.$f.was" "$ProfileDir\$f.prev"; Write-Host "   your previous $f is kept as $ProfileDir\$f.prev" }
-}
-
-# --- 4. privacy services via Task Scheduler (scrubber :8788 + og-veil :11435) --------------
-Say "Registering privacy services (Task Scheduler, at-logon + auto-restart)"
-$svcSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-$svcTrigger  = New-ScheduledTaskTrigger -AtLogOn
-$svcs = @(
-  @{ Name="ghost-scrubber"; Exec=$Pyw; Args="`"$Priv\scrubbing_proxy.py`"" },
-  @{ Name="ghost-veil";     Exec=$Pyw; Args="-m veil serve --foreground --skip-setup --port 11435" }
-)
-foreach ($s in $svcs) {
-  $a = New-ScheduledTaskAction -Execute $s.Exec -Argument $s.Args
-  Register-ScheduledTask -TaskName $s.Name -Action $a -Trigger $svcTrigger -Settings $svcSettings -Force | Out-Null
-  Start-ScheduledTask -TaskName $s.Name
-}
-Write-Host "   waiting for the scrubber + og-veil"
-foreach ($probe in @("http://127.0.0.1:8788/healthz","http://127.0.0.1:11435/health")) {
-  for ($i=0; $i -lt 20; $i++) { try { if ((Invoke-WebRequest $probe -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}; Start-Sleep 1 }
-}
-
-# --- 5. the ghost / ghost-login / ghost-update commands ------------------------------------
-Say "Installing the ghost commands"
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-$hermesExe = "$Eng\.hermes\bin\hermes.exe"
-if (-not (Test-Path $hermesExe)) { $hermesExe = "$Eng\.hermes\bin\hermes.cmd" }
-# ghost.cmd
-@"
-@echo off
-set "HERMES_HOME=%USERPROFILE%\.ghost"
-set "ANTHROPIC_API_KEY="
-if /I "%~1"=="update" ( call "%~dp0ghost-update.cmd" & exit /b %errorlevel% )
-if /I "%~1"=="--scrub" ( type nul > "%USERPROFILE%\.ghost\privacy\.scrub" & shift )
-if /I "%~1"=="--no-scrub" ( del /q "%USERPROFILE%\.ghost\privacy\.scrub" 2>nul & shift )
-call "$hermesExe" -p uncensored %*
-"@ | Set-Content -Encoding ascii "$BinDir\ghost.cmd"
-# ghost-login.cmd  (og-veil login through the engine venv)
-@"
-@echo off
-"$Venv\Scripts\python.exe" -m veil %*
-"@ | Set-Content -Encoding ascii "$BinDir\ghost-login.cmd"
-# ghost-update.cmd  (pull + re-run installer)
-@"
-@echo off
-set "SRC=%USERPROFILE%\.ghost-src"
-if exist "%SRC%\.git" ( git -C "%SRC%" pull --ff-only ) else ( git clone https://github.com/OpenGradient/ghost.git "%SRC%" )
-powershell -ExecutionPolicy Bypass -NoProfile -File "%SRC%\install.ps1" %*
-"@ | Set-Content -Encoding ascii "$BinDir\ghost-update.cmd"
-
-& "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -RefreshGateway
-
-# add $BinDir to user PATH
-$userPath = [Environment]::GetEnvironmentVariable("Path","User")
-if ($userPath -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("Path","$BinDir;$userPath","User"); $env:Path = "$BinDir;$env:Path" }
-
-# --- 6. connect + smoke test ---------------------------------------------------------------
-Say "Connect your OpenGradient Chat account: run  ghost-login  (browser login)"
-Say "Smoke test"
-& cmd /c "`"$BinDir\ghost-login.cmd`" status >nul 2>&1"
-if ($LASTEXITCODE -eq 0) { & "$BinDir\ghost.cmd" --yolo -z "Reply with one word: hi" }
-else { Write-Host "   skipped -- it needs a connected account (run 'ghost-login', then 'ghost')" }
-
-Say "ghost installed -- open a new terminal and run:  ghost"
-Write-Host "   Hosted default = abliteration/abliterated-model-large-v2 via the OpenGradient TEE gateway (OHTTP-private)."
-Write-Host "   Not connected yet? Run:  ghost-login"
+$who = & $Py -Es "$Priv\ghost_login.py" --status
+if ($LASTEXITCODE -eq 0) { Say "ghost is ready. $who." } else { Say "ghost is ready. It asks you to log in the first time." }
+Write-Host "   Open a new terminal and run:  ghost"
+exit 0

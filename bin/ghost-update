@@ -1,29 +1,28 @@
 #!/bin/sh
-# ghost-update -- pull the latest ghost source and re-run the installer (idempotent),
-# reusing the options you first installed with (GHOST_LOCAL / GHOST_SCRUB / ...). This
-# updates ghost's wrapper (privacy stack, commands, profile) and rebuilds the engine.
-# Invoked by `ghost update`.
+# ghost-update -- get the latest ghost and install it, with the options you chose the first time (`ghost update`).
 #
-# The Hermes release the engine is built on is pinned in the source (engine.pin), so a
-# newer engine arrives here too, once ghost's patches have been verified against it.
+# The Hermes release the engine is built on is pinned in the source (engine.pin), so a newer engine arrives
+# here too, once ghost's patches have been checked against it.
 set -e
 GHOST_HOME="__GHOST_HOME__"
+export GHOST_HOME GHOST_ENGINE="__ENG__"
 
-# Prefer the source repo you installed from; fall back to a managed clone in ~/.ghost-src.
+# The source you installed from, or ghost's own copy.
 SRC="$(cat "$GHOST_HOME/.src" 2>/dev/null || true)"
-[ -d "$SRC/.git" ] || SRC="$HOME/.ghost-src"
+MANAGED="$HOME/.ghost-src"
+[ -d "$SRC/.git" ] || SRC="$MANAGED"
 
-if [ -d "$SRC/.git" ]; then
-  echo "👻 ghost-update · pulling latest source ($SRC)"
-  git -C "$SRC" pull --ff-only || git -C "$SRC" pull
-else
-  echo "👻 ghost-update · fetching ghost into $SRC"
+if [ ! -d "$SRC/.git" ]; then
   rm -rf "$SRC"
-  git clone https://github.com/OpenGradient/ghost.git "$SRC"
+  git clone --quiet https://github.com/OpenGradient/ghost.git "$SRC"
+elif [ "$SRC" = "$MANAGED" ]; then   # always the released branch, whatever was checked out before
+  git -C "$SRC" fetch --quiet origin main
+  git -C "$SRC" checkout --quiet main && git -C "$SRC" merge --quiet --ff-only origin/main || {
+    echo "Your copy of ghost in $SRC has changes of yours in it, so it wasn't updated." >&2
+    echo "Set them aside (git -C $SRC stash) and run this again." >&2
+    exit 1
+  }
+else
+  git -C "$SRC" pull --quiet --ff-only
 fi
-
-# Re-apply the same install options you chose originally.
-if [ -f "$GHOST_HOME/.install-env" ]; then set -a; . "$GHOST_HOME/.install-env"; set +a; fi
-
-echo "👻 ghost-update · re-running the installer (idempotent)"
 exec bash "$SRC/install.sh"

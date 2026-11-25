@@ -159,6 +159,21 @@ def test_refuses_while_ghost_is_open(box, shape):
     assert box.run("--check").returncode == 0
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_it_is_noticed_without_ps_too(box):
+    """Minimal systems (a container, say) don't have it."""
+    assert box.run(src=box.source("one")).returncode == 0
+    tools = box.root / "tools"
+    tools.mkdir()
+    for directory in ("/usr/bin", "/bin"):
+        for name in os.listdir(directory):
+            if name != "ps" and not os.path.lexists(tools / name):
+                (tools / name).symlink_to(f"{directory}/{name}")
+    assert box.run("--check", PATH=str(tools)).returncode == 0
+    window = box.process("path", "-p", "uncensored")
+    assert f"ghost is open (pid {window.pid})" in box.run("--check", PATH=str(tools)).stderr
+
+
 @pytest.mark.parametrize("shape", ["path", "bootstrap"])
 def test_gateway_does_not_count_as_open(box, shape):
     assert box.run(src=box.source("one")).returncode == 0

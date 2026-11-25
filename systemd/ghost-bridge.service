@@ -1,0 +1,11 @@
+[Unit]
+Description=ghost's local bridge to the TEE gateway (127.0.0.1:8788)
+
+[Service]
+Environment=GHOST_HOME=__GHOST_HOME__
+ExecStart=__PYTHON__ -Es __GHOST_HOME__/privacy/scrubbing_proxy.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

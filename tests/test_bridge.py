@@ -17,10 +17,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "privacy"))
 pytest.importorskip("opengradient_ohttp")
-pytest.importorskip("veil")
 import scrubbing_proxy as sp  # noqa: E402
 import spend  # noqa: E402
 
+REAL_UPSTREAM = sp._upstream
 MODEL = "abliteration/abliterated-model-large-v2"
 TOOLS = [{"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {}}}}]
 
@@ -80,15 +80,16 @@ def bridge(enclave):
     server = ThreadingHTTPServer(("127.0.0.1", 0), sp.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    def ask(stream=True, **extra):
+    def ask(stream=True, origin=None, **extra):
         body = {"model": MODEL, "stream": stream, "messages": [{"role": "user", "content": "rewrite these scenes"}], **extra}
         req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
-                                     json.dumps(body).encode(), {"Content-Type": "application/json"})
+                                     json.dumps(body).encode(), {"Content-Type": "application/json", **({"Origin": origin} if origin else {})})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status, resp.read().decode()
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())["error"]["message"]
+    ask.url = f"http://127.0.0.1:{server.server_port}"
     yield ask
     server.shutdown()
     server.server_close()
@@ -185,11 +186,46 @@ def test_refusals_are_passed_on(enclave, bridge, failure, status, words):
 
 def test_not_logged_in_fails_at_once(monkeypatch, enclave, bridge):
     def nobody():
-        raise sp.AuthError("not logged in")
+        raise sp.AuthError(sp.ghost_auth.NOT_LOGGED_IN)
     monkeypatch.setattr(sp, "_upstream", nobody)
     started = time.time()
     assert bridge() == (401, "not logged in to DreamFort; run `ghost-login`")
     assert time.time() - started < 2 and enclave.seen == 0
+
+
+@pytest.mark.parametrize("login, relay, token, words", [
+    ({"mode": "account"}, "https://chat/api/v1/chat/ohttp", "jwt", "DreamFort account is out of credits"),
+    ({"mode": "api_key"}, "https://chat/api/v1/developer/ohttp", "df_sk_1", "DreamFort API balance is out of credits"),
+])
+def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, words):
+    """The real _upstream, with the transport watched: which relay a request goes to, and as whom."""
+    seen = []
+
+    class Transport(httpx.BaseTransport):
+        def __init__(self, relay_url, verify_before_release, timeout):   # and no registry: the library's own is used
+            assert verify_before_release is True
+            self.relay = relay_url
+
+        def handle_request(self, request):
+            seen.append((self.relay, request.headers["Authorization"]))
+            return httpx.Response(402, json={"error": {"message": "x"}})
+    monkeypatch.setattr(sp, "_upstream", REAL_UPSTREAM)
+    monkeypatch.setattr(sp, "OHTTPTransport", Transport)
+    monkeypatch.setattr(sp, "_clients", {})
+    monkeypatch.setattr(sp.ghost_auth, "credentials", lambda: (relay, token))
+    monkeypatch.setattr(sp.ghost_auth, "api_key", lambda: token if login["mode"] == "api_key" else None)
+    status, message = bridge()
+    assert (status, seen) == (402, [(relay, f"Bearer {token}")]) and words in message
+
+
+def test_the_bridge_says_which_process_it_is(bridge):
+    with urllib.request.urlopen(bridge.url + "/healthz", timeout=5) as resp:
+        assert (resp.read(), resp.headers["X-Ghost-Pid"]) == (b"ok", str(os.getpid()))
+
+
+def test_a_web_page_cannot_spend_your_credits(enclave, bridge):
+    """Any site can make a browser POST to localhost; only the engine (which sends no Origin) is answered."""
+    assert bridge(origin="https://evil.example")[0] == 403 and enclave.seen == 0
 
 
 # ── the budget ────────────────────────────────────────────────────────────────
@@ -233,4 +269,4 @@ def test_budget_survives_a_restart(monkeypatch, enclave, bridge):
     (["budget", "-3"], 2, ""), (["usage"], 0, "Last hour"),
 ])
 def test_usage_commands(enclave, capsys, argv, code, words):
-    assert spend._cli(argv) == code and words in capsys.readouterr().out
+    assert spend.main(argv) == code and words in capsys.readouterr().out

@@ -1,286 +1,323 @@
 #!/usr/bin/env bash
-# ghost -- one-command installer for the incognito, uncensored agentic harness.
+# ghost -- the installer and updater for macOS, Linux and WSL2 (on Windows: install.ps1). Safe to re-run.
 #
-#   ./install.sh
+#   curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
 #
-# Installs EVERYTHING, idempotently (safe to re-run): the Hermes engine release pinned in engine.pin
-# (debranded, hardened, with its own runtime), the privacy stack, and the `ghost` + `ghost-login`
-# commands. It never touches a normie Hermes install.
+# Sets up the engine (the Hermes release pinned in engine.pin, debranded, with its own runtime), the local
+# bridge that seals requests to the TEE gateway, and the `ghost` commands. It contacts no model and needs no
+# login: ghost asks you to log in the first time you run it. A normie Hermes install is never touched.
 #
-# Hosted (non-local) models run through ghost's local PII scrubber and then og-veil
-# (the opengradient-veil package), which encrypts each request over Oblivious-HTTP to
-# the OpenGradient chat-api TEE gateway -- the same enclave path the chat.opengradient.ai
-# website uses. After install, run `ghost-login` once to connect your account (a browser
-# login that hands a session token to og-veil).
-#
-# The scrubber + og-veil talk to chat-api directly: content is private (og-veil OHTTP-encrypts
-# it and the TEE enclave separates identity), reached over your normal connection.
-#
-# Optional config via env (all optional -- plain `./install.sh` does the full private setup):
-#   GHOST_LOCAL=1        also install Ollama + a local model for an offline / true-incognito
-#                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 70B)
-#   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
-#   GHOST_SCRUB=1        opt in to OUTBOUND PII + secret redaction (OFF by default -- ghost is a
-#                        full-fidelity agent; og-veil's OHTTP+TEE provides the privacy regardless)
-#   GHOST_NO_BROWSER=1   skip Chromium + the computer-use driver (smaller, faster install)
-#   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
+# Options, as environment variables. `ghost update` remembers them; set one to 0 to turn it off again.
+#   GHOST_LOCAL=1        also install Ollama and a local model, for `ghost --local` and as the offline fallback
+#   GHOST_LOCAL_32B=1    the stronger 32B local model too (26GB; implies GHOST_LOCAL)
+#   GHOST_SCRUB=1        redact your PII and secrets from everything sent (off by default: requests are sealed
+#                        to the enclave either way, and ghost works best seeing what you see)
+#   GHOST_NO_BROWSER=1   skip Chromium and the computer-use driver (a smaller, faster install)
+#   GHOST_VERBOSE=1      show everything as it runs, instead of keeping it in ~/.ghost/install.log
 set -euo pipefail
 
-# Supported platforms: macOS (privacy services via launchd) and Linux / WSL2 (systemd --user,
-# with a plain background-process fallback where systemd --user isn't available).
-OS="$(uname -s)"
-case "$OS" in
-  Darwin|Linux) ;;
-  *) echo "!! ghost supports macOS, Linux, and WSL2. Detected: $OS." >&2; exit 1 ;;
-esac
+main() {
+  OS="$(uname -s)"
+  case "$OS" in
+    Darwin|Linux) ;;
+    *) echo "ghost runs on macOS, Linux and WSL2 (and on Windows with install.ps1). This is: $OS." >&2; exit 1 ;;
+  esac
 
-# Resolve where this script lives. When run via `curl ... | bash` there is no checkout, so
-# self-bootstrap: clone (or fast-forward) the repo into ~/.ghost-src and re-exec from there. This
-# makes ONE deterministic command both INSTALL and UPDATE ghost -- no manual clone, no LLM needed.
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
-  command -v git >/dev/null 2>&1 || { echo "!! ghost needs git to fetch itself; install it (xcode-select --install) and re-run." >&2; exit 1; }
-  SRC="${GHOST_SRC_DIR:-$HOME/.ghost-src}"
-  if [ -d "$SRC/.git" ]; then
-    echo "==> Updating ghost source ($SRC)"; git -C "$SRC" pull --ff-only || git -C "$SRC" pull
-  else
-    echo "==> Fetching ghost into $SRC"; rm -rf "$SRC"; git clone https://github.com/OpenGradient/ghost.git "$SRC"
-  fi
-  exec bash "$SRC/install.sh" "$@"
-fi
-GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
-PROFILE="$GHOST_HOME/profiles/uncensored"
-PRIV="$GHOST_HOME/privacy"
-LA="$HOME/Library/LaunchAgents"
-ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
-PYTHON="${GHOST_PYTHON:-}"   # resolved to an isolated uv venv (Python 3.11) in the Dependencies step
-SCRUBBER="http://127.0.0.1:8788"
-# Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
-# auxiliary tasks route to a hosted model (abliteration/deepseek-v4.1-flash-abliterated) over the same private og-veil
-# path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
-# fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
-# since hosted-only is now the default.)
-WANT_LOCAL="${GHOST_LOCAL:-}"; [ -n "${GHOST_LOCAL_32B:-}" ] && WANT_LOCAL=1
-
-# Record the source path + the chosen install options so `ghost update` can re-pull and
-# re-install the exact same way (see bin/ghost-update).
-mkdir -p "$GHOST_HOME"
-echo "$REPO" > "$GHOST_HOME/.src"
-{
-  [ -n "${GHOST_LOCAL:-}" ] && echo "GHOST_LOCAL=1"
-  [ -n "${GHOST_LOCAL_32B:-}" ] && echo "GHOST_LOCAL_32B=1"
-  [ -n "${GHOST_SCRUB:-}" ] && echo "GHOST_SCRUB=1"
-  [ -n "${GHOST_NO_BROWSER:-}" ] && echo "GHOST_NO_BROWSER=1"
-  [ -n "${GHOST_CHAT_APP_URL:-}" ] && echo "GHOST_CHAT_APP_URL=$GHOST_CHAT_APP_URL"
-  :
-} > "$GHOST_HOME/.install-env"
-
-say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
-have(){ command -v "$1" >/dev/null 2>&1; }
-
-# Nothing below runs while a ghost window is open: it would be left on a half-replaced engine.
-GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check
-
-# ---------- 0. dependencies (auto-installed) ----------
-say "Dependencies"
-# uv manages the Python toolchain + an isolated venv for ghost's privacy stack, so we never depend
-# on the system python (Apple ships 3.9) -- uv fetches CPython 3.11 itself if the machine lacks it.
-if ! have uv; then
-  echo "   installing uv (Astral's Python package/venv manager)"
-  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-fi
-have uv || { echo "!! ghost needs uv (https://docs.astral.sh/uv/getting-started/installation/); install it and re-run." >&2; exit 1; }
-
-if [ -n "$WANT_LOCAL" ]; then
-  if ! have ollama && have brew; then echo "   installing Ollama (brew --cask)"; brew install --cask ollama || true; fi
-  have ollama || { echo "!! GHOST_LOCAL set but Ollama is missing -- install it from https://ollama.com (or drop GHOST_LOCAL for hosted-only) then re-run."; exit 1; }
-  if [ "$OS" = "Darwin" ]; then pgrep -xq ollama || open -a Ollama 2>/dev/null || true
-  else pgrep -xq ollama || (nohup ollama serve >/dev/null 2>&1 &) || true; fi
-  sleep 1
-fi
-
-# Privacy stack: og-veil (the opengradient-veil package) owns the whole hosted-inference protocol
-# -- on-chain TEE registry discovery, OHTTP/HPKE encryption, response verification, the Supabase
-# session. Declared in pyproject.toml + uv.lock, installed into an ISOLATED venv at ~/.ghost/venv
-# (Python 3.11, fetched by uv if the system lacks it). Reproducible; never touches system python.
-say "Privacy stack (isolated uv venv, Python 3.11)"
-export UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv"
-SYNC_EXTRAS=""
-# The NER scrubber (Presidio + spaCy) is only needed if you opt into redaction -- skip it otherwise.
-[ -n "${GHOST_SCRUB:-}" ] && SYNC_EXTRAS="--extra presidio"
-( cd "$REPO" && uv sync --python 3.11 --frozen $SYNC_EXTRAS ) \
-  || ( cd "$REPO" && uv sync --python 3.11 $SYNC_EXTRAS ) \
-  || { echo "!! failed to provision the privacy venv (uv sync); check network and re-run." >&2; exit 1; }
-PYTHON="$UV_PROJECT_ENVIRONMENT/bin/python"
-echo "   venv: Python $("$PYTHON" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))') · og-veil $("$PYTHON" -c 'import importlib.metadata as m;print(m.version("opengradient-veil"))' 2>/dev/null)"
-
-# ---------- 1. the engine ----------
-say "Building the engine (pinned Hermes release, debranded) -> $ENG"
-GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh"
-
-# ---------- 2. local models (OPT-IN via GHOST_LOCAL; 32B also needs GHOST_LOCAL_32B) ----------
-LOCAL_MODEL="ghost-tool:latest"
-if [ -z "$WANT_LOCAL" ]; then
-  say "Hosted-only (default) -- skipping Ollama + local models. Set GHOST_LOCAL=1 for an offline / incognito local fallback."
-else
-  say "Local models (GHOST_LOCAL)"
-  while IFS=$'\t' read -r src alias opt; do
-    case "$src" in \#*|"") continue;; esac
-    if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
-      echo "   skipping optional $alias (26GB) -- set GHOST_LOCAL_32B=1 to include the stronger local model"; continue
+  # Run as `curl ... | bash` there is no checkout: get one, and carry on from there.
+  REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
+    need_git
+    SRC="${GHOST_SRC_DIR:-$HOME/.ghost-src}"
+    if [ ! -d "$SRC/.git" ]; then
+      rm -rf "$SRC"; git clone --quiet https://github.com/OpenGradient/ghost.git "$SRC"
+    else   # always the released branch, whatever was checked out before
+      git -C "$SRC" fetch --quiet origin main
+      git -C "$SRC" checkout --quiet main && git -C "$SRC" merge --quiet --ff-only origin/main || {
+        echo "Your copy of ghost in $SRC has changes of yours in it. Set them aside (git -C $SRC stash) and run this again." >&2
+        exit 1
+      }
     fi
-    if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"
-    else echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"; fi
+    exec bash "$SRC/install.sh" "$@"
+  fi
+
+  GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"
+  ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
+  PROFILE="$GHOST_HOME/profiles/uncensored"
+  PRIV="$GHOST_HOME/privacy"
+  BIN="$HOME/.local/bin"
+  PYTHON="$GHOST_HOME/venv/bin/python"
+  LOG="$GHOST_HOME/install.log"
+  HERMES_VERSION=""; . "$REPO/engine.pin"
+  LOCAL_MODEL="" NOTES=()
+  mkdir -p "$GHOST_HOME"; : > "$LOG"
+  options
+  ui
+
+  printf '\n  %s👻 ghost%s\n\n' "$BOLD" "$OFF" >&3
+  step "Checking this machine"                                   check_machine
+  step "Installing the privacy bridge"                           install_bridge
+  step "Building the engine (Hermes $HERMES_VERSION, a few minutes)" build_engine
+  [ -z "$GHOST_LOCAL" ] || step "Getting the local model"        local_model
+  step "Writing your profile"                                    write_profile
+  step "Starting the background service"                         start_service
+  step "Installing the ghost command"                            install_commands
+  finish
+}
+
+# ── options ───────────────────────────────────────────────────────────────────
+options() {
+  local name
+  SCRUB_OFF=""; [ "${GHOST_SCRUB-}" != 0 ] || SCRUB_OFF=1   # asked for now, rather than never asked for
+  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_SCRUB GHOST_NO_BROWSER; do
+    local value="${!name-$(sed -n "s/^$name=//p" "$GHOST_HOME/.install-env" 2>/dev/null | tail -1)}"
+    case "$value" in ""|0) value="" ;; *) value=1 ;; esac
+    printf -v "$name" '%s' "$value"
+    export "${name?}"
+  done
+  [ -z "$GHOST_LOCAL_32B" ] || GHOST_LOCAL=1
+}
+
+remember() {   # what `ghost update` and `ghost uninstall` need to know
+  local name
+  echo "$REPO" > "$GHOST_HOME/.src"
+  for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_SCRUB GHOST_NO_BROWSER; do
+    [ -z "${!name}" ] || echo "$name=1"
+  done > "$GHOST_HOME/.install-env"
+}
+
+# ── what you see ──────────────────────────────────────────────────────────────
+# Each step's own output goes to the log; on a failure the end of it is shown.
+ui() {
+  exec 3>&1
+  BOLD="" DIM="" GOLD="" GREEN="" RED="" OFF="" FANCY="" STEP="" SPIN="" STARTED=0
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+    FANCY=1 BOLD=$'\033[1m' DIM=$'\033[2m' GOLD=$'\033[38;5;220m' GREEN=$'\033[32m' RED=$'\033[31m' OFF=$'\033[0m'
+  fi
+  trap on_exit EXIT
+  trap 'exit 130' INT TERM
+}
+
+step() {   # step "what it does" command...
+  STEP="$1"; shift
+  STARTED=$SECONDS
+  if [ -n "${GHOST_VERBOSE:-}" ]; then
+    printf '\n%s==>%s %s\n' "$GOLD" "$OFF" "$STEP" >&3
+    "$@" </dev/null
+  else
+    printf '\n==> %s\n' "$STEP" >> "$LOG"
+    spin
+    "$@" </dev/null >> "$LOG" 2>&1
+    unspin
+  fi
+  printf '  %s✓%s %s%s\n' "$GREEN" "$OFF" "$STEP" "$(took)" >&3
+  STEP=""
+}
+
+took() { local s=$((SECONDS - STARTED)); [ "$s" -lt 5 ] || printf ' %s%ss%s' "$DIM" "$s" "$OFF"; }
+
+spin() {
+  [ -n "$FANCY" ] || return 0
+  ( trap - EXIT INT TERM
+    frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0
+    while kill -0 $$ 2>/dev/null; do
+      printf '\r\033[2K  %s%s%s %s%s' "$GOLD" "${frames[i % 10]}" "$OFF" "$STEP" "$(took)" >&3
+      i=$((i + 1)); sleep 0.1
+    done ) &
+  SPIN=$!
+}
+
+unspin() {
+  [ -n "$SPIN" ] || return 0
+  kill "$SPIN" 2>/dev/null || true
+  wait "$SPIN" 2>/dev/null || true
+  SPIN=""
+  printf '\r\033[2K' >&3
+}
+
+die() {   # a failure we can explain: no need to show the log
+  unspin
+  printf '  %s✗%s %s\n\n' "$RED" "$OFF" "$1" >&3
+  STEP=""
+  exit 1
+}
+
+on_exit() {
+  local code=$?
+  unspin
+  [ "$code" -ne 0 ] && [ -n "$STEP" ] || return 0
+  printf '  %s✗%s %s\n\n' "$RED" "$OFF" "$STEP" >&3
+  [ "$code" -ne 130 ] || { printf '  Stopped. Run the installer again to carry on.\n\n' >&3; return 0; }
+  if [ -z "${GHOST_VERBOSE:-}" ]; then
+    tail -n 15 "$LOG" | sed 's/^/      /' >&3
+    printf '\n  The whole log is in %s\n' "$LOG" >&3
+  fi
+  printf '  Nothing is half-installed: run the installer again once that is fixed.\n\n' >&3
+}
+
+# ── steps ─────────────────────────────────────────────────────────────────────
+have() { command -v "$1" >/dev/null 2>&1; }
+
+need_git() {   # (on a Mac without the command line tools, `git` exists but only offers to install them)
+  git --version >/dev/null 2>&1 && return
+  local how="install it with your package manager, then run this again"
+  [ "$(uname -s)" != Darwin ] || how="finish the install macOS is offering (or run: xcode-select --install), then run this again"
+  if declare -F die >/dev/null && [ -n "${LOG:-}" ]; then die "ghost needs git: $how."; fi
+  echo "ghost needs git: $how." >&2; exit 1
+}
+
+check_machine() {
+  need_git
+  have curl || die "ghost needs curl: install it with your package manager, then run this again."
+  local open
+  if ! open="$(GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check 2>&1)"; then
+    case "$open" in "!! ghost is open"*) die "${open#!! }" ;; *) echo "$open"; return 1 ;; esac
+  fi
+  if ! have uv; then   # it brings the bridge's own Python, so the system's never matters
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  fi
+  have uv || die "couldn't install uv (https://docs.astral.sh/uv/getting-started/installation/). Install it, then run this again."
+  if [ -n "$GHOST_LOCAL" ] && ! have ollama; then
+    ! have brew || brew install --cask ollama || true
+    have ollama || die "GHOST_LOCAL needs Ollama: install it from https://ollama.com (or drop GHOST_LOCAL), then run this again."
+  fi
+  remember
+}
+
+install_bridge() {
+  local extra=()
+  [ -z "$GHOST_SCRUB" ] || extra=(--extra presidio)
+  ( cd "$REPO" && UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" uv sync --python 3.11 --frozen ${extra[@]+"${extra[@]}"} )
+  mkdir -p "$PRIV"
+  rm -f "$PRIV/ensure_scrubber_route.py" "$PRIV/.proxy" "$PRIV/.no_scrub" "$PRIV/.pass_paths" "$PRIV/.presidio"   # older releases'
+  cp "$REPO"/privacy/*.py "$PRIV/"
+  cp "$REPO/profile/uncensored_prefill.json" "$PRIV/"
+  [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
+  [ -z "$SCRUB_OFF" ] || rm -f "$PRIV/.scrub"
+  [ -n "$GHOST_SCRUB" ] || return 0   # (what `ghost --scrub` switched on stays on)
+  : > "$PRIV/.scrub"
+  "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md
+  : > "$PRIV/.presidio"
+  NOTES+=("Redaction is on. Add your own terms to $PRIV/pii_denylist.txt")
+}
+
+build_engine() {
+  GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh"
+}
+
+local_model() {
+  if [ "$OS" = Darwin ]; then pgrep -xq ollama || open -a Ollama 2>/dev/null || true
+  else pgrep -x ollama >/dev/null || (nohup ollama serve >/dev/null 2>&1 &) || true; fi
+  sleep 1
+  local src alias need modelfile
+  while IFS=$'\t' read -r src alias need; do
+    case "$src" in \#*|"") continue ;; esac
+    [ "$need" != optional ] || [ -n "$GHOST_LOCAL_32B" ] || continue
+    ollama show "$alias" >/dev/null 2>&1 || { ollama pull "$src"; ollama cp "$src" "$alias"; }
     # The engine refuses a window under 64K for tool use, and Ollama's own default is far smaller.
     if ! ollama show --parameters "$alias" 2>/dev/null | grep -q '^num_ctx'; then
-      MODELFILE="$(mktemp)"; printf 'FROM %s\nPARAMETER num_ctx 65536\n' "$alias" > "$MODELFILE"
-      ollama create "$alias" -f "$MODELFILE" >/dev/null; rm -f "$MODELFILE"
+      modelfile="$(mktemp)"; printf 'FROM %s\nPARAMETER num_ctx 65536\n' "$alias" > "$modelfile"
+      ollama create "$alias" -f "$modelfile"; rm -f "$modelfile"
     fi
   done < "$REPO/models.txt"
-  if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
-  echo "   local model = $LOCAL_MODEL"
-fi
+  LOCAL_MODEL="ghost-tool:latest"
+  ! ollama show uncensored-local >/dev/null 2>&1 || LOCAL_MODEL="uncensored-local:latest"
+}
 
-# ---------- 3. uncensored profile ----------
-say "Writing the uncensored profile"
-mkdir -p "$PROFILE"
-for f in config.yaml SOUL.md; do [ ! -f "$PROFILE/$f" ] || cp -p "$PROFILE/$f" "$PROFILE/.$f.was"; done
-sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
-cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
-[ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
-"$PYTHON" "$REPO/scripts/migrate_skills.py" "$GHOST_HOME" "$PROFILE"
-if [ -z "$WANT_LOCAL" ]; then   # hosted-only (default) -> route auxiliary + fallback to a hosted model via og-veil
-  "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
-import sys, re
-p = sys.argv[1]; s = open(p).read()
-# Handle both key orders (provider-then-model and model-then-provider in the auxiliary blocks).
-s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
-           r"provider: opengradient\n\1model: abliteration/deepseek-v4.1-flash-abliterated", s)
-s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
-           r"model: abliteration/deepseek-v4.1-flash-abliterated\n\1provider: opengradient", s)
-s = s.replace("provider: ollama-local", "provider: opengradient")
-# Chat fallback -> Hermes 405B (aux tasks stay on the cheap, fast DeepSeek V4.1 Flash Abliterated).
-s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )abliteration/deepseek-v4.1-flash-abliterated",
-           r"\g<1>nous/hermes-4-405b", s, count=1)
-open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> abliteration/deepseek-v4.1-flash-abliterated (via og-veil)")
-PYEOF
-fi
+write_profile() {
+  local kept line
+  kept="$("$PYTHON" "$REPO/scripts/write_profile.py" "$PROFILE" --ghost-home "$GHOST_HOME" \
+    ${LOCAL_MODEL:+--local-model "$LOCAL_MODEL"} ${GHOST_SCRUB:+--scrub})"
+  while IFS= read -r line; do [ -z "$line" ] || NOTES+=("${line/#your/Your}"); done <<< "$kept"
+  "$PYTHON" "$REPO/scripts/migrate_skills.py" "$GHOST_HOME" "$PROFILE"
+}
 
-# ---------- 4. privacy stack (PII scrubber + og-veil) ----------
-say "Privacy stack (PII/secret scrubber -> og-veil)"
-mkdir -p "$PRIV"
-cp "$REPO"/privacy/*.py "$PRIV/"
-# Stage the NER engine for redaction. Redaction is OFF by default, so this only matters once you
-# opt in (GHOST_SCRUB / ghost --scrub). When the presidio extra is installed, fetch the spaCy model
-# and mark NER available; otherwise redaction (if turned on later) uses the regex engine.
-if "$PYTHON" -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
-  "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md >/dev/null 2>&1 || true
-  if "$PYTHON" -c "import en_core_web_md" 2>/dev/null; then
-    : > "$PRIV/.presidio"; echo "   redaction engine ready: Presidio + spaCy NER (used only when redaction is on)"
-  else
-    rm -f "$PRIV/.presidio"; echo "   redaction engine: regex (spaCy model unavailable)"
-  fi
-else
-  rm -f "$PRIV/.presidio"   # presidio not installed (default) -> regex engine if redaction is turned on
-fi
-[ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
-cp "$REPO/profile/uncensored_prefill.json" "$PRIV/uncensored_prefill.json"
-# Outbound PII + secret redaction is OPT-IN (GHOST_SCRUB=1), OFF by default: ghost is a
-# full-fidelity agent and og-veil's OHTTP+TEE already make the hosted path private. The .scrub
-# marker drives the bridge; the engine's redact_secrets/redact_pii follow the same default.
-if [ -n "${GHOST_SCRUB:-}" ]; then
-  : > "$PRIV/.scrub"
-  "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
-import sys, re
-p = sys.argv[1]; s = open(p).read()
-s = re.sub(r"(?m)^  redact_secrets: false$", "  redact_secrets: true", s)
-s = re.sub(r"(?m)^  redact_pii: false$", "  redact_pii: true", s)
-open(p, "w").write(s)
-PYEOF
-  say "Outbound PII + secret redaction ON (GHOST_SCRUB)"
-else
-  rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
-  say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
-fi
-# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
-for f in config.yaml SOUL.md; do
-  [ -f "$PROFILE/.$f.was" ] || continue
-  if cmp -s "$PROFILE/.$f.was" "$PROFILE/$f"; then rm -f "$PROFILE/.$f.was"
-  else mv -f "$PROFILE/.$f.was" "$PROFILE/$f.prev"; echo "   your previous $f is kept as $PROFILE/$f.prev"; fi
-done
-# Run the privacy services (scrubber :8788 + og-veil :11435) as managed, auto-restarting
-# background services -- launchd on macOS, systemd --user on Linux/WSL2 (with a plain
-# background-process fallback). Both talk to chat-api directly (content private via OHTTP/TEE).
-rm -f "$PRIV/.proxy"   # clean any rotating-proxy marker from an older install
-
-if [ "$OS" = "Darwin" ]; then
-  mkdir -p "$LA"
-  for svc in hermes-pii-scrubber hermes-veil; do
-    sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" "$REPO/launchd/com.advait.$svc.plist" > "$LA/com.advait.$svc.plist"
-    launchctl unload "$LA/com.advait.$svc.plist" 2>/dev/null || true
-    launchctl load -w "$LA/com.advait.$svc.plist"
+free_port() {   # stopping a service finishes in its own time, and two bridges can't share the port
+  local _
+  for _ in $(seq 1 50); do
+    curl -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz || return 0
+    sleep 0.2
   done
-elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-  UD="$HOME/.config/systemd/user"; mkdir -p "$UD"
-  for svc in ghost-scrubber ghost-veil; do
-    sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__PRIV__#$PRIV#g" "$REPO/systemd/$svc.service" > "$UD/$svc.service"
-  done
-  systemctl --user daemon-reload
-  systemctl --user reenable ghost-scrubber.service ghost-veil.service >/dev/null 2>&1 || true
-  systemctl --user restart ghost-scrubber.service ghost-veil.service
-  loginctl enable-linger "$USER" >/dev/null 2>&1 || true   # keep services up without an active login (reboot persistence)
-  echo "   services started via systemd --user (logs: journalctl --user -u ghost-veil)"
-else
-  echo "   systemd --user unavailable -- starting services as background processes"
-  echo "   (no reboot persistence; re-run the installer or 'ghost update' to restart them)"
-  pkill -f "$PRIV/scrubbing_proxy.py" 2>/dev/null || true
-  pkill -f "veil serve --foreground --skip-setup --port 11435" 2>/dev/null || true
-  OG_VEIL_PORT=11435 nohup "$PYTHON" -m veil serve --foreground --skip-setup --port 11435 > "$PRIV/veil.out.log" 2>&1 &
-  nohup "$PYTHON" "$PRIV/scrubbing_proxy.py" > "$PRIV/scrubber.out.log" 2>&1 &
-fi
+}
 
-printf "   waiting for the scrubbing bridge"
-for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$SCRUBBER/healthz" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up"
-printf "   waiting for og-veil"
-for _ in $(seq 1 20); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:11435/health" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up (or pending ghost-login)"
+stop_bridge() {   # whichever process holds the port, as it says itself (minimal systems have no `pkill`)
+  local pid
+  pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p' || true)"
+  [ -z "$pid" ] || kill "$pid" || true
+}
 
-# ---------- 5. the ghost + ghost-login + ghost-update commands ----------
-say "Installing the ghost + ghost-login + ghost-update commands"
-mkdir -p "$HOME/.local/bin"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost" > "$HOME/.local/bin/ghost"
-sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
-sed -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-update" > "$HOME/.local/bin/ghost-update"
-chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login" "$HOME/.local/bin/ghost-update"
+fill() { sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" -e "s#__ENG__#$ENG#g" "$1"; }
 
-GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --refresh-gateway
-
-# ---------- 6. connect your account (hosted models) ----------
-say "Connect your OpenGradient Chat account (for hosted models)"
-GL="$HOME/.local/bin/ghost-login"   # thin wrapper over `og-veil login` (installed above)
-if "$GL" --status >/dev/null 2>&1; then
-  echo "   already connected: $("$GL" --status)"
-else
-  echo "   Hosted models (the default DeepSeek V4 Pro + Hermes 4, all open-weight) need a one-time login."
-  if [ -t 0 ]; then
-    printf "   Run the browser login now? [Y/n] "; read -r ANS || true
-    case "${ANS:-Y}" in [Nn]*) echo "   Skipped -- run 'ghost-login' anytime.";; *) "$GL" || echo "   (login skipped/failed -- run 'ghost-login' anytime)";; esac
+# The bridge runs in the background and restarts by itself: launchd on macOS, systemd on Linux. Where neither
+# is available (some containers, WSL without systemd) `ghost` starts it when it's needed.
+start_service() {
+  local label unit
+  if [ "$OS" = Darwin ]; then
+    local agents="$HOME/Library/LaunchAgents" domain; domain="gui/$(id -u)"
+    mkdir -p "$agents"
+    for label in com.advait.hermes-pii-scrubber com.advait.hermes-veil ai.dreamfort.ghost; do   # (the first two: older releases')
+      [ -f "$agents/$label.plist" ] || continue
+      launchctl bootout "$domain/$label" 2>/dev/null || launchctl unload "$agents/$label.plist" 2>/dev/null || true
+      rm -f "$agents/$label.plist"
+    done
+    free_port
+    fill "$REPO/launchd/ai.dreamfort.ghost.plist" > "$agents/ai.dreamfort.ghost.plist"
+    for _ in 1 2 3 4 5; do
+      ! launchctl bootstrap "$domain" "$agents/ai.dreamfort.ghost.plist" || break
+      sleep 1
+    done
+  elif have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+    local units="$HOME/.config/systemd/user"
+    mkdir -p "$units"
+    for unit in ghost-scrubber ghost-veil; do   # older releases'
+      [ -f "$units/$unit.service" ] || continue
+      systemctl --user disable --now "$unit.service" || true
+      rm -f "$units/$unit.service"
+    done
+    fill "$REPO/systemd/ghost-bridge.service" > "$units/ghost-bridge.service"
+    systemctl --user daemon-reload
+    systemctl --user enable ghost-bridge.service
+    systemctl --user restart ghost-bridge.service
+    loginctl enable-linger "$(id -un)" || true   # so it's there after a reboot, before you log in
   else
-    echo "   Non-interactive install -- run 'ghost-login' once you're done."
+    stop_bridge
+    pkill -f "$PRIV/scrubbing_proxy.py" || true   # older releases' bridge and og-veil
+    pkill -f "veil serve --foreground --skip-setup --port 11435" || true
+    free_port
   fi
-fi
+  "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())' "$PRIV" \
+    || die "the background service didn't start. Its log is $PRIV/bridge.log"
+}
 
-# ---------- 7. smoke test ----------
-say "Smoke test"
-if "$GL" --status >/dev/null 2>&1 && curl -sf -o /dev/null --max-time 3 http://127.0.0.1:11435/health; then
-  "$HOME/.local/bin/ghost" --yolo -z "Reply with one word: hi" 2>&1 | tail -2 || true
-else
-  echo "   skipped -- it needs a connected account (run 'ghost-login', then 'ghost')"
-fi
+install_commands() {
+  local name
+  mkdir -p "$BIN"
+  for name in ghost ghost-login ghost-update ghost-uninstall; do
+    fill "$REPO/bin/$name" > "$BIN/.$name.new"
+    chmod +x "$BIN/.$name.new"
+    mv -f "$BIN/.$name.new" "$BIN/$name"   # in one move: `ghost update` is running from one of these
+  done
+  GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --refresh-gateway
+}
 
-say "ghost installed -- run:  ghost"
-case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Hosted default = abliteration/abliterated-model-large-v2 via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
-echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
-echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
-echo "   Not connected yet? Run:  ghost-login"
+finish() {
+  local who note rc
+  printf '\n' >&3
+  for note in ${NOTES[@]+"${NOTES[@]}"}; do printf '  %s%s%s\n' "$DIM" "$note" "$OFF" >&3; done
+  [ "${#NOTES[@]}" -eq 0 ] || printf '\n' >&3
+  case ":$PATH:" in
+    *":$BIN:"*) ;;
+    *) if (cd "$HOME" && grep -qs '\.local/bin' .zshrc .zprofile .zshenv .bashrc .bash_profile .profile); then
+         printf '  Open a new terminal first, so that it finds ~/.local/bin.\n\n' >&3
+       else
+         case "${SHELL:-}" in */zsh) rc="~/.zshrc" ;; */bash) rc="~/.bashrc" ;; *) rc="~/.profile" ;; esac
+         printf '  First put ~/.local/bin on your PATH, then open a new terminal:\n\n' >&3
+         printf '      echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> %s\n\n' "$rc" >&3
+       fi ;;
+  esac
+  if who="$("$BIN/ghost-login" --status 2>/dev/null)"; then printf '  %sghost is ready.%s %s.\n\n' "$BOLD" "$OFF" "$who" >&3
+  else printf '  %sghost is ready.%s It asks you to log in the first time.\n\n' "$BOLD" "$OFF" >&3; fi
+  printf '      %sghost%s\n\n' "$GOLD" "$OFF" >&3
+}
+
+main "$@"
