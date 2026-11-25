@@ -77,7 +77,7 @@ FB_MODEL=$(awk '/^fallback_model:/{f=1;next} f&&/^  model:/{sub(/.*\//,"",$2);pr
 if grep -A2 "^fallback_model:" "$CFG" 2>/dev/null | grep -q "provider: ollama-local"; then
   FB="fallback: ${FB_MODEL:-local} (offline)"; FB_DOWN="falling back to local ${FB_MODEL:-model} (offline)"
 else
-  FB="fallback: ${FB_MODEL:-hermes-4-70b}"; FB_DOWN="no offline fallback (hosted-only)"
+  FB="fallback: ${FB_MODEL:-hermes-4-405b}"; FB_DOWN="no offline fallback (hosted-only)"
 fi
 
 # Privacy comes from og-veil: every request is HPKE/OHTTP-encrypted, so the relay only ever sees

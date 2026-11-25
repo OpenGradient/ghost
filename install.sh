@@ -56,7 +56,7 @@ ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-}"   # resolved to an isolated uv venv (Python 3.11) in the Dependencies step
 SCRUBBER="http://127.0.0.1:8788"
 # Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
-# auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
+# auxiliary tasks route to a hosted model (abliteration/deepseek-v4.1-flash-abliterated) over the same private og-veil
 # path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
 # fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
 # since hosted-only is now the default.)
@@ -156,14 +156,14 @@ import sys, re
 p = sys.argv[1]; s = open(p).read()
 # Handle both key orders (provider-then-model and model-then-provider in the auxiliary blocks).
 s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
-           r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
+           r"provider: opengradient\n\1model: abliteration/deepseek-v4.1-flash-abliterated", s)
 s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
-           r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
+           r"model: abliteration/deepseek-v4.1-flash-abliterated\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-# Chat fallback -> the stronger 405B (aux tasks stay on 70B for speed/cost).
-s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b",
+# Chat fallback -> Hermes 405B (aux tasks stay on the cheap, fast DeepSeek V4.1 Flash Abliterated).
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )abliteration/deepseek-v4.1-flash-abliterated",
            r"\g<1>nous/hermes-4-405b", s, count=1)
-open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> nous/hermes-4-70b (via og-veil)")
+open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> abliteration/deepseek-v4.1-flash-abliterated (via og-veil)")
 PYEOF
 fi
 
@@ -280,7 +280,7 @@ fi
 
 say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
+echo "   Hosted default = abliteration/abliterated-model-large-v2 via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
 echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
 echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
 echo "   Not connected yet? Run:  ghost-login"
