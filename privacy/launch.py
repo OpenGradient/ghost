@@ -198,7 +198,7 @@ def _start_process():
 
 def leave_proxies():
     """The bridge is a background service, and doesn't see the proxies your shell sets."""
-    if urllib.request.getproxies_environment() or (PRIV / "proxies.json").exists():
+    if urllib.request.getproxies_environment() or (PRIV / "proxies.json").exists() or os.name == "nt":
         import outbound   # (not for nothing: it brings an HTTP client along)
         outbound.note()
 
@@ -237,6 +237,9 @@ def engine_binary():
 def engine_proxies():
     """What an engine needs to reach the world through this machine's proxy, and the bridge without it."""
     found = urllib.request.getproxies()   # the environment's, or the system's settings
+    if os.name == "nt" and not found:
+        import outbound
+        found = outbound._noted()
     env = {f"{scheme}_proxy": found[scheme] for scheme in ("http", "https", "all") if found.get(scheme)}
     if env:
         direct = [h.strip() for h in (found.get("no") or "").split(",") if h.strip()]

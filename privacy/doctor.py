@@ -59,7 +59,8 @@ def relay():
     if "login" in _found:
         return False, _found["login"], "ghost login"
     if "unreachable" in _found:
-        return False, f"can't be reached ({_found['unreachable']}); check your connection, VPN or proxy", None
+        script = "; this machine finds its proxy with a script, so set HTTPS_PROXY to its address" if outbound.scripted() and not outbound._noted() else ""
+        return False, f"can't be reached ({_found['unreachable']}){script or '; check your connection, VPN or proxy'}", None
     status = _found.get("relay")
     if status in (401, 403):
         return False, "doesn't accept this login any more", "ghost login"

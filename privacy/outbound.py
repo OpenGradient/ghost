@@ -2,7 +2,7 @@
 it trusts, as a company laptop needs.
 
 The bridge is a background service, which doesn't see what your shell sets (HTTPS_PROXY and so on), so `ghost`
-leaves a note of it. A proxy that can't be used is an error: going around it would show your address.
+leaves a note of it, and on Windows of the proxy a company's script (PAC) picks. A proxy that can't be used is an error: going around it would show your address.
 
 With one exception. Which enclaves to trust is read from the TEE registry, so on a network that inspects TLS
 that read must fail rather than believe the network: it trusts the public authorities only.
@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import ssl
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -32,9 +33,39 @@ def trust():
 NOTE = Path(os.environ.get("GHOST_HOME") or Path.home() / ".ghost") / "privacy" / "proxies.json"
 
 
+def scripted():
+    """Does this machine find its proxy with a script (PAC)? Python doesn't follow those."""
+    if os.name == "nt":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as key:
+                return bool(winreg.QueryValueEx(key, "AutoConfigURL")[0])
+        except OSError:
+            return False
+    if sys.platform == "darwin":
+        try:
+            return "ProxyAutoConfigEnable : 1" in subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return False
+
+
+def _picked():
+    """What that script picks for DreamFort. (Windows' own code can be asked.)"""
+    ask = ("$u = [Uri]'https://chat-api.memchat.io/'; $p = [Net.WebRequest]::GetSystemWebProxy().GetProxy($u); "
+           "if ($p -and $p.AbsoluteUri -ne $u.AbsoluteUri) { $p.AbsoluteUri }")
+    try:
+        found = subprocess.run(["powershell", "-NoProfile", "-Command", ask], capture_output=True, text=True, timeout=30).stdout.strip().rstrip("/")
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return {"http": found, "https": found, "no": "127.0.0.1,localhost"} if found else {}
+
+
 def note():
     """Leave your shell's proxies for the bridge (or that it has none, when you're there to see to it)."""
     found = urllib.request.getproxies_environment()
+    if os.name == "nt" and not urllib.request.getproxies() and scripted():
+        found = _picked()
     try:
         if any(found.get(kind) for kind in ("http", "https", "all")):
             fd = os.open(NOTE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
