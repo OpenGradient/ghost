@@ -171,6 +171,7 @@ UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transpo
 TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
 _RETRY_STATUS = frozenset({500, 502, 503, 504})
 _MAX_TRIES = 3
+_BUSY_WAITS = (5, 10, 20, 30)   # seconds: the relay takes 40 requests a minute, which a quick agent can reach
 _BREAK_WINDOW = 300.0
 
 _lock = threading.Lock()
@@ -204,18 +205,23 @@ def _backoff(attempt):
     time.sleep(min(4.0, 0.5 * (2 ** attempt)) + random.uniform(0, 0.3))
 
 
+def _wait(seconds):
+    time.sleep(seconds)
+
+
 def _open(obj):
     """Start one generation and return its open stream. Retries only what the enclave never accepted."""
-    for attempt in range(_MAX_TRIES):
-        last = attempt == _MAX_TRIES - 1
+    tries, waits = 0, list(_BUSY_WAITS)
+    while True:
         client, headers = _upstream()
         try:
             resp = client.send(client.build_request("POST", UPSTREAM, json=obj, headers=headers), stream=True)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
-            if last:
+            tries += 1
+            if tries == _MAX_TRIES:
                 raise Refused(502, f"couldn't reach DreamFort ({type(e).__name__}); check your connection and try again") from e
-            log(f"relay unreachable (try {attempt + 1}): {e}; retrying")
-            _backoff(attempt)
+            log(f"relay unreachable (try {tries}): {e}; retrying")
+            _backoff(tries - 1)
             continue
         if resp.status_code < 400:
             return resp
@@ -223,10 +229,16 @@ def _open(obj):
             message = _decode_error(resp.read())
         finally:
             resp.close()
-        if resp.status_code in _RETRY_STATUS and not last:
-            log(f"relay {resp.status_code} before accepting (try {attempt + 1}): {message}; retrying")
-            _backoff(attempt)
+        if resp.status_code == 429 and waits:
+            log(f"too many requests this minute; waiting {waits[0]}s")
+            _wait(waits.pop(0))
             continue
+        if resp.status_code in _RETRY_STATUS:
+            tries += 1
+            if tries < _MAX_TRIES:
+                log(f"relay {resp.status_code} before accepting (try {tries}): {message}; retrying")
+                _backoff(tries - 1)
+                continue
         if resp.status_code == 401:
             message = "DreamFort didn't accept this login; run `ghost-login` to connect again"
         elif resp.status_code == 402:
