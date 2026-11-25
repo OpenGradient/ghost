@@ -26,7 +26,7 @@ KEEP = 31 * DAY
 # Dollars per million tokens (in, out), for replies whose own cost never arrived because they broke off.
 PRICES = {
     "abliterated-model-large-v2": (3.0, 5.0),
-    "deepseek-v4-pro": (1.28, 2.56),
+    "deepseek-v4-pro": (1.32, 3.96),
     "deepseek-v4.1-flash-abliterated": (0.3, 1.2),
     "hermes-4-405b": (1.0, 3.0),
 }

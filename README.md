@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3DDC97?style=flat-square)](LICENSE) &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey?style=flat-square) &nbsp;[![Built on Hermes Agent](https://img.shields.io/badge/built%20on-Hermes%20Agent-7C5CFF?style=flat-square)](https://github.com/NousResearch/hermes-agent) &nbsp;![Open-weight only](https://img.shields.io/badge/models-open--weight%20only-FF8A3D?style=flat-square)
 
-**A private, unrestricted agentic harness.** A real terminal agent that runs commands, edits files, executes code, and searches the web, with every hosted request routed through OpenGradient's TEE gateway so the model provider never sees your prompts. It answers what you actually ask, drops to a fully-offline local model on demand, and phones home to no one.
+**A private, unrestricted agentic harness.** A real terminal agent that runs commands, edits files, executes code, and searches the web, with every hosted request sealed to OpenGradient's TEE gateway so that nobody on the way can tie what you asked to who you are. It answers what you actually ask, drops to a fully-offline local model on demand, and phones home to no one.
 
 Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine by Nous Research, wired to OpenGradient's gateway and to only open-weight, unrestricted models.
 
@@ -85,15 +85,15 @@ An update installs that release's `config.yaml` and `SOUL.md`; if you changed yo
 
 **The Fix.** ghost only connects **open-weight, unrestricted models** (Abliterated Large v2 by default, with its refusals removed from the weights; plus DeepSeek V4 Pro and Hermes 4 405B, steered), so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
 
-### Problem #2: The Provider Reads Everything You Send
+### Problem #2: The Provider Knows It's You
 
 > "Privacy is the power to selectively reveal oneself to the world."
 >
 > Eric Hughes, [A Cypherpunk's Manifesto](https://www.activism.net/cypherpunk/manifesto.html)
 
-**The Problem.** "Hosted inference" means your prompts, your code, your secrets, whatever you're working on, land in plaintext on someone else's servers, logged and trained on.
+**The Problem.** "Hosted inference" means your prompts, your code, whatever you're working on, land on someone else's servers with your name on them: one company holds both who you are and everything you asked.
 
-**The Fix.** Every hosted request is sealed on your machine (HPKE/OHTTP, with [opengradient-ohttp](https://github.com/OpenGradient/sdk/tree/main/packages/opengradient-ohttp)) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and the enclave's signature is checked before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
+**The Fix.** Every hosted request is sealed on your machine (HPKE/OHTTP, with [opengradient-ohttp](https://github.com/OpenGradient/sdk/tree/main/packages/opengradient-ohttp)) and opened only inside an attested **TEE enclave**. The relay that knows your account sees ciphertext. The enclave that opens the prompt never learns whose it is, and passes it to the model's host under its own key with nothing of yours attached. Its signature is checked before a single token reaches you. [Who sees what](#how-the-private-path-works), exactly. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
 
 > [!TIP]
 > And it doesn't give up. Most agents stop and ask after the first error; ghost reads the actual error, installs what's missing, changes tactics, and keeps going until the task is done. Set a standing goal with `/goal <objective>` and it works toward it across turns on its own.
@@ -102,7 +102,7 @@ An update installs that release's `config.yaml` and `SOUL.md`; if you changed yo
 
 |  | ghost | a vanilla coding agent | a hosted chat app |
 |---|:---:|:---:|:---:|
-| Provider sees your prompts | **No** -- TEE + OHTTP | Yes | Yes |
+| Someone can tie your prompts to you | **No** -- TEE + OHTTP | Yes | Yes |
 | Refuses / moralizes | **No** -- open-weight + steer | Often | Often |
 | Runs fully offline | **Yes** -- `--local` | No | No |
 | Real terminal + tools | **Yes** | Yes | No |
@@ -117,25 +117,27 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 |---|---|
 | `abliteration/abliterated-model-large-v2` **(default)** | Uncensored by abliteration, with refusals removed from the weights rather than steered past. 1M context; built for authorized offensive-security, red-team and long-horizon agent work. |
 | `deepseek/deepseek-v4-pro` | Strongest open reasoning + coding model; uncensored via ghost's steer. |
-| `abliteration/deepseek-v4.1-flash-abliterated` | Fast, very low-cost abliterated DeepSeek; runs ghost's auxiliary tasks (titles, compression, etc.). |
+| `abliteration/deepseek-v4.1-flash-abliterated` | Fast and far cheaper ($0.30 / $1.20 per million tokens in / out, against the default's $3 / $5), reads images, 1M context, and the one whose host runs in TEEs too. Runs ghost's auxiliary tasks (titles, compression, etc.). |
 | `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback. |
 | local (opt-in) | Abliterated 7B / 32B via `GHOST_LOCAL`, fully offline, zero egress. |
 
 ## How the private path works
 
-<details>
-<summary>The full request path: bridge → relay → TEE enclave</summary>
-
 ```
 ghost engine
-  └─ bridge (127.0.0.1:8788)   limits and budget, seal to an attested enclave
-       └─ relay (chat-api)       sees your login and IP, but only ciphertext
-            └─ TEE enclave       decrypts, runs the model, signs the reply (the bridge checks it)
+  └─ bridge (127.0.0.1:8788)   limits and budget, seals the request to an attested enclave
+       └─ relay (chat-api)       your login and IP, but only ciphertext
+            └─ TEE enclave       opens it, calls the model, signs the reply (the bridge checks it)
+                 └─ model's host   the prompt, under the gateway's key
 ```
 
-Two boundaries, the same path [dreamfort.ai](https://www.dreamfort.ai) uses: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. So the hosted path is **private, not anonymous** -- your account is still authenticated and the relay sees your IP. For true anonymity, use the local model (zero egress).
+| | Sees who you are (account, IP) | Sees what you wrote |
+|---|:---:|:---:|
+| DreamFort's relay | Yes | **No**, only ciphertext |
+| The enclave | **No** | Yes, inside attested hardware |
+| The model's host | **No** | Yes |
 
-</details>
+The model's host is NEAR AI for DeepSeek V4.1 Flash Abliterated (served from TEEs as well), abliteration.ai for Abliterated Large v2, Together for DeepSeek V4 Pro, and the cheapest host on OpenRouter for Hermes 4 405B. They get the text and nothing else: no account, no IP, no header of yours. What's *in* the text is still in the text, so a prompt that names you names you. When that isn't good enough, `ghost --local` sends nothing anywhere.
 
 ## Honest limits
 
@@ -151,4 +153,4 @@ Two boundaries, the same path [dreamfort.ai](https://www.dreamfort.ai) uses: the
 
 ## Security
 
-ghost is a privacy tool; a leak of your prompts is treated as a P0. See [SECURITY.md](SECURITY.md) for how to report one privately.
+ghost is a privacy tool; anything that ties your prompts to you, or lets them out unsealed, is treated as a P0. See [SECURITY.md](SECURITY.md) for how to report one privately.
