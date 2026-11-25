@@ -167,7 +167,7 @@ def test_it_is_noticed_without_ps_too(box):
     tools.mkdir()
     for directory in ("/usr/bin", "/bin"):
         for name in os.listdir(directory):
-            if name != "ps" and not (tools / name).exists():
+            if name != "ps" and not os.path.lexists(tools / name):
                 (tools / name).symlink_to(f"{directory}/{name}")
     assert box.run("--check", PATH=str(tools)).returncode == 0
     window = box.process("path", "-p", "uncensored")
