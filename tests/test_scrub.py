@@ -266,10 +266,27 @@ def test_stream_multiline_data_frame_deanonymized():
 def test_catalog_is_open_weight_only():
     # ghost must only offer/allow OPEN-WEIGHT models; no closed/refusing ones.
     allowed = sp._ALLOWED_GATEWAY_MODELS
-    assert allowed == {"abliterated-model-large-v2", "hermes-4-405b", "hermes-4-70b", "deepseek-v4-pro"}
+    assert allowed == {"abliterated-model-large-v2", "hermes-4-405b", "deepseek-v4-pro", "deepseek-v4.1-flash-abliterated"}
     blob = json.dumps(sp._CATALOG_MODELS).lower()
     for closed in ("claude", "gpt-", "gemini", "grok", "anthropic", "seed-"):
         assert closed not in blob, f"closed model '{closed}' must not be in the catalog"
+
+
+@pytest.mark.parametrize("path, key", [("/model-catalog.json", "providers"), ("/models-dev.json", "opengradient")])
+def test_bridge_answers_the_engines_catalog_reads(path, key):
+    # The engine's registry/catalog URLs point at the bridge, so it never asks a third party for them.
+    import http.server
+    import threading
+    import urllib.request
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), sp.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}{path}", timeout=5) as resp:
+            assert resp.headers["Content-Type"] == "application/json"
+            assert json.load(resp)[key]
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_stream_external_tool_keeps_placeholder():

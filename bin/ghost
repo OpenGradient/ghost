@@ -57,7 +57,7 @@ if [ "${1:-}" = "--local" ]; then
     exit 1
   fi
   echo "👻 ghost · 🔒 LOCAL mode = $LM (fully offline -- no scrubber, no og-veil, nothing leaves the box)" >&2
-  exec "__ENG__/venv/bin/hermes" -p uncensored -m "$LM" --provider ollama-local "$@"
+  exec "__ENG__/.hermes/bin/hermes" -p uncensored -m "$LM" --provider ollama-local "$@"
 fi
 
 # Are we connected to a hosted account?  (hosted models need `ghost-login` -> og-veil login.)
@@ -78,7 +78,7 @@ FB_MODEL=$(awk '/^fallback_model:/{f=1;next} f&&/^  model:/{sub(/.*\//,"",$2);pr
 if grep -A2 "^fallback_model:" "$CFG" 2>/dev/null | grep -q "provider: ollama-local"; then
   FB="fallback: ${FB_MODEL:-local} (offline)"; FB_DOWN="falling back to local ${FB_MODEL:-model} (offline)"
 else
-  FB="fallback: ${FB_MODEL:-hermes-4-70b}"; FB_DOWN="no offline fallback (hosted-only)"
+  FB="fallback: ${FB_MODEL:-hermes-4-405b}"; FB_DOWN="no offline fallback (hosted-only)"
 fi
 
 # Privacy comes from og-veil: every request is HPKE/OHTTP-encrypted, so the relay only ever sees
@@ -96,7 +96,7 @@ if [ -f "$SCRUB_MARK" ]; then STATUS="$STATUS · 🔒 redaction ON (PII+secrets 
 [ -f "__GHOST_HOME__/privacy/.presidio_failed" ] && STATUS="$STATUS · ⚠️ NER scrubber OFF (regex fallback -- reinstall or check Presidio)"
 echo "$STATUS" >&2
 
-HB="__ENG__/venv/bin/hermes"
+HB="__ENG__/.hermes/bin/hermes"
 if [ -n "$PASS_PATHS" ]; then
   : > "$SENTINEL"
   trap 'rm -f "$SENTINEL"' EXIT INT TERM

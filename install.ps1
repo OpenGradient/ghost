@@ -5,9 +5,9 @@
 #   irm https://raw.githubusercontent.com/OpenGradient/ghost/main/install.ps1 | iex
 # From a clone:  powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
-# EXPERIMENTAL: this was authored without a Windows machine to test on. The logic mirrors the
-# (tested) install.sh and Hermes's own Windows installer, but expect to debug it on a real
-# Windows box. Please report failures. The mac/linux install.sh is unaffected.
+# EXPERIMENTAL: CI builds the engine on Windows, but the privacy services below (Task Scheduler) have
+# only been authored, not run on a real Windows box. Please report failures. The mac/linux install.sh
+# is unaffected.
 #
 # Options (env vars or switches): -Local (offline model), -Scrub (outbound PII/secret redaction).
 # ============================================================================
@@ -19,7 +19,6 @@ $GhostHome = "$env:USERPROFILE\.ghost"
 $ProfileDir = "$GhostHome\profiles\uncensored"
 $Priv      = "$GhostHome\privacy"
 $Eng       = "$env:USERPROFILE\.ghost-engine"
-$HermesSrc = "$env:LOCALAPPDATA\hermes\hermes-agent"
 $BinDir    = "$env:USERPROFILE\.local\bin"
 $Venv      = "$GhostHome\venv"
 function Say($m) { Write-Host "`n==> $m" -ForegroundColor Yellow }
@@ -42,20 +41,17 @@ Set-Content -Path "$GhostHome\.src" -Value $RepoRoot -Encoding UTF8
 $envLines = @(); if ($Local) { $envLines += "GHOST_LOCAL=1" }; if ($Scrub) { $envLines += "GHOST_SCRUB=1" }
 Set-Content -Path "$GhostHome\.install-env" -Value ($envLines -join "`n") -Encoding UTF8
 
-# --- 0. dependencies: uv (provisions Python 3.11) + the Hermes engine ----------------------
+# Nothing below runs while a ghost window is open: it would be left on a half-replaced engine.
+& "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Check
+
+# --- 0. dependencies: uv (provisions Python 3.11 for the privacy stack) --------------------
 Say "Dependencies"
 if (-not (Have uv)) { Say "Installing uv (Astral's Python manager)"; irm https://astral.sh/uv/install.ps1 | iex; $env:Path = "$env:USERPROFILE\.local\bin;$env:Path" }
 if (-not (Have uv)) { throw "uv install failed; install it from https://docs.astral.sh/uv/ and re-run." }
 
-if (-not (Test-Path $HermesSrc)) {
-  Say "Installing the Hermes Agent engine (official Windows installer)"
-  iex (irm https://hermes-agent.nousresearch.com/install.ps1)
-}
-if (-not (Test-Path $HermesSrc)) { throw "Hermes engine not found at $HermesSrc after install." }
-
-# --- 1. fork + debrand the engine ----------------------------------------------------------
-Say "Forking + debranding the engine -> $Eng"
-& powershell -ExecutionPolicy Bypass -NoProfile -File "$RepoRoot\scripts\fork-engine.ps1" -Src $HermesSrc -Eng $Eng
+# --- 1. the engine (pinned Hermes release, debranded) --------------------------------------
+Say "Building the engine -> $Eng"
+& powershell -ExecutionPolicy Bypass -NoProfile -File "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome
 if ($LASTEXITCODE -ne 0) { throw "fork-engine.ps1 failed" }
 
 # --- 2. privacy stack: isolated uv venv (Python 3.11) --------------------------------------
@@ -74,23 +70,26 @@ Copy-Item "$RepoRoot\privacy\*.py" $Priv -Force
 # --- 3. uncensored profile -----------------------------------------------------------------
 Say "Writing the uncensored profile"
 New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
+foreach ($f in "config.yaml","SOUL.md") { if (Test-Path "$ProfileDir\$f") { Copy-Item "$ProfileDir\$f" "$ProfileDir\.$f.was" -Force } }
 $LocalModel = "ghost-tool:latest"
 $homeFwd = ($env:USERPROFILE -replace '\\','/')
-(Get-Content -Raw "$RepoRoot\profile\config.yaml") -replace '__HOME__',$homeFwd -replace '__LOCAL_MODEL__',$LocalModel |
+(Get-Content -Raw -Encoding UTF8 "$RepoRoot\profile\config.yaml") -replace '__HOME__',$homeFwd -replace '__LOCAL_MODEL__',$LocalModel |
   Set-Content -NoNewline -Encoding UTF8 "$ProfileDir\config.yaml"
 Copy-Item "$RepoRoot\profile\SOUL.md" "$ProfileDir\SOUL.md" -Force
 if (-not (Test-Path "$ProfileDir\.env")) { Copy-Item "$RepoRoot\profile\.env.example" "$ProfileDir\.env" -Force }
+& $Py "$RepoRoot\scripts\migrate_skills.py" $GhostHome $ProfileDir
 if (-not $Local) {
   # hosted-only: route auxiliary + fallback to hosted models (mirrors install.sh)
-  & $Py - "$ProfileDir\config.yaml" @'
+  $hosted = @'
 import sys, re
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-s = re.sub(r"provider: ollama-local\n(\s*)model: \S+", r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
-s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local", r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
+s = re.sub(r"provider: ollama-local\n(\s*)model: \S+", r"provider: opengradient\n\1model: abliteration/deepseek-v4.1-flash-abliterated", s)
+s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local", r"model: abliteration/deepseek-v4.1-flash-abliterated\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b", r"\g<1>nous/hermes-4-405b", s, count=1)
-open(p, "w", encoding="utf-8").write(s); print("   hosted-only: fallback -> 405b, auxiliary -> 70b (via og-veil)")
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )abliteration/deepseek-v4.1-flash-abliterated", r"\g<1>nous/hermes-4-405b", s, count=1)
+open(p, "w", encoding="utf-8").write(s); print("   hosted-only: fallback -> 405b, auxiliary -> deepseek-v4.1-flash-abliterated (via og-veil)")
 '@
+  $hosted | & $Py - "$ProfileDir\config.yaml"   # python reads its script from stdin
 }
 # redaction markers (off by default)
 if (-not (Test-Path "$Priv\pii_denylist.txt")) { Copy-Item "$RepoRoot\profile\pii_denylist.example.txt" "$Priv\pii_denylist.txt" -Force }
@@ -98,13 +97,13 @@ Copy-Item "$RepoRoot\profile\uncensored_prefill.json" "$Priv\uncensored_prefill.
 Remove-Item "$Priv\.proxy","$Priv\.no_scrub" -ErrorAction SilentlyContinue
 if ($Scrub) {
   Set-Content -Path "$Priv\.scrub" -Value "" -Encoding UTF8
-  & $Py - "$ProfileDir\config.yaml" @'
+  @'
 import sys, re
-p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+p = sys.argv[1]; s = open(p, encoding="utf-8-sig").read()
 s = re.sub(r"(?m)^  redact_secrets: false$", "  redact_secrets: true", s)
 s = re.sub(r"(?m)^  redact_pii: false$", "  redact_pii: true", s)
 open(p, "w", encoding="utf-8").write(s)
-'@
+'@ | & $Py - "$ProfileDir\config.yaml"
   Say "Outbound PII + secret redaction ON (-Scrub)"
 } else {
   Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue
@@ -114,6 +113,13 @@ if ($Scrub) {
   & $Py -m spacy download en_core_web_md 2>$null
   & $Py -c "import en_core_web_md" 2>$null
   if ($LASTEXITCODE -eq 0) { Set-Content "$Priv\.presidio" "" -Encoding ascii }
+}
+
+# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
+foreach ($f in "config.yaml","SOUL.md") {
+  if (-not (Test-Path "$ProfileDir\.$f.was")) { continue }
+  if ((Get-FileHash "$ProfileDir\.$f.was").Hash -eq (Get-FileHash "$ProfileDir\$f").Hash) { Remove-Item "$ProfileDir\.$f.was" }
+  else { Move-Item -Force "$ProfileDir\.$f.was" "$ProfileDir\$f.prev"; Write-Host "   your previous $f is kept as $ProfileDir\$f.prev" }
 }
 
 # --- 4. privacy services via Task Scheduler (scrubber :8788 + og-veil :11435) --------------
@@ -137,7 +143,8 @@ foreach ($probe in @("http://127.0.0.1:8788/healthz","http://127.0.0.1:11435/hea
 # --- 5. the ghost / ghost-login / ghost-update commands ------------------------------------
 Say "Installing the ghost commands"
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-$hermesExe = "$Eng\venv\Scripts\hermes.exe"
+$hermesExe = "$Eng\.hermes\bin\hermes.exe"
+if (-not (Test-Path $hermesExe)) { $hermesExe = "$Eng\.hermes\bin\hermes.cmd" }
 # ghost.cmd
 @"
 @echo off
@@ -146,7 +153,7 @@ set "ANTHROPIC_API_KEY="
 if /I "%~1"=="update" ( call "%~dp0ghost-update.cmd" & exit /b %errorlevel% )
 if /I "%~1"=="--scrub" ( type nul > "%USERPROFILE%\.ghost\privacy\.scrub" & shift )
 if /I "%~1"=="--no-scrub" ( del /q "%USERPROFILE%\.ghost\privacy\.scrub" 2>nul & shift )
-"$hermesExe" -p uncensored %*
+call "$hermesExe" -p uncensored %*
 "@ | Set-Content -Encoding ascii "$BinDir\ghost.cmd"
 # ghost-login.cmd  (og-veil login through the engine venv)
 @"
@@ -161,6 +168,8 @@ if exist "%SRC%\.git" ( git -C "%SRC%" pull --ff-only ) else ( git clone https:/
 powershell -ExecutionPolicy Bypass -NoProfile -File "%SRC%\install.ps1" %*
 "@ | Set-Content -Encoding ascii "$BinDir\ghost-update.cmd"
 
+& "$RepoRoot\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -RefreshGateway
+
 # add $BinDir to user PATH
 $userPath = [Environment]::GetEnvironmentVariable("Path","User")
 if ($userPath -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("Path","$BinDir;$userPath","User"); $env:Path = "$BinDir;$env:Path" }
@@ -168,8 +177,10 @@ if ($userPath -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("Pat
 # --- 6. connect + smoke test ---------------------------------------------------------------
 Say "Connect your OpenGradient Chat account: run  ghost-login  (browser login)"
 Say "Smoke test"
-& "$BinDir\ghost.cmd" --yolo -z "Reply with one word: hi"
+& cmd /c "`"$BinDir\ghost-login.cmd`" status >nul 2>&1"
+if ($LASTEXITCODE -eq 0) { & "$BinDir\ghost.cmd" --yolo -z "Reply with one word: hi" }
+else { Write-Host "   skipped -- it needs a connected account (run 'ghost-login', then 'ghost')" }
 
 Say "ghost installed -- open a new terminal and run:  ghost"
-Write-Host "   Hosted default = deepseek/deepseek-v4-pro via the OpenGradient TEE gateway (OHTTP-private)."
+Write-Host "   Hosted default = abliteration/abliterated-model-large-v2 via the OpenGradient TEE gateway (OHTTP-private)."
 Write-Host "   Not connected yet? Run:  ghost-login"

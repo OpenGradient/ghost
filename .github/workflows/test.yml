@@ -21,3 +21,48 @@ jobs:
         run: python -m spacy download en_core_web_md
       - name: Run scrubber tests (incl. golden leak canary)
         run: pytest tests/ -q
+
+  # The real thing: install ghost the way a user does, then check the engine it built.
+  engine:
+    name: engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      GHOST_NO_BROWSER: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest uv
+      - name: Install ghost
+        if: runner.os != 'Windows'
+        run: |
+          ./install.sh
+          test "$("$HOME/.local/bin/ghost" --version 2>/dev/null | head -1 | cut -c1-6)" = "Ghost "
+      - name: Update over it, with the background gateway running
+        if: runner.os != 'Windows'
+        run: |
+          ghost="$HOME/.local/bin/ghost"
+          pid() { python -c "import json, pathlib; print(json.loads((pathlib.Path.home() / '.ghost/profiles/uncensored/gateway_state.json').read_text())['pid'])"; }
+          profile="$HOME/.ghost/profiles/uncensored"; echo "# mine" | tee -a "$profile/SOUL.md" >> "$profile/config.yaml"
+          "$ghost" gateway install --start-now --start-on-login
+          sleep 15; "$ghost" gateway status; before="$(pid)"; kill -0 "$before"
+          ./install.sh
+          sleep 15; "$ghost" gateway status; after="$(pid)"; kill -0 "$after"
+          test "$before" != "$after" && ! kill -0 "$before" 2>/dev/null
+          test ! -e "$HOME/.ghost/.restart-gateway"
+          for f in SOUL.md config.yaml; do grep -q "# mine" "$profile/$f.prev"; ! grep -q "# mine" "$profile/$f"; done
+      - name: Build the engine
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\scripts\fork-engine.ps1
+      - name: Check the engine
+        shell: bash
+        # Naming the engine makes these fail, not skip, when it isn't the pinned build.
+        run: GHOST_ENGINE="$HOME/.ghost-engine" GHOST_HOME="$HOME/.ghost" pytest -q tests/test_engine.py tests/test_fork_engine.py tests/test_migrate_skills.py

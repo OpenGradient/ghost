@@ -1,11 +1,11 @@
 #!/bin/sh
 # ghost-update -- pull the latest ghost source and re-run the installer (idempotent),
 # reusing the options you first installed with (GHOST_LOCAL / GHOST_SCRUB / ...). This
-# updates ghost's wrapper (privacy stack, commands, profile) and re-forks + re-debrands
-# the engine. Invoked by `ghost update`.
+# updates ghost's wrapper (privacy stack, commands, profile) and rebuilds the engine.
+# Invoked by `ghost update`.
 #
-# Note: this does NOT pull a newer UPSTREAM Hermes engine on its own -- for that, run
-# `hermes update` first (updates the base install), then `ghost update` re-forks it.
+# The Hermes release the engine is built on is pinned in the source (engine.pin), so a
+# newer engine arrives here too, once ghost's patches have been verified against it.
 set -e
 GHOST_HOME="__GHOST_HOME__"
 

@@ -3,9 +3,9 @@
 #
 #   ./install.sh
 #
-# Installs EVERYTHING, idempotently (safe to re-run): Ollama, the Hermes engine, the local
-# uncensored models, the forked + debranded engine, the privacy stack, and the `ghost` +
-# `ghost-login` commands.
+# Installs EVERYTHING, idempotently (safe to re-run): the Hermes engine release pinned in engine.pin
+# (debranded, hardened, with its own runtime), the privacy stack, and the `ghost` + `ghost-login`
+# commands. It never touches a normie Hermes install.
 #
 # Hosted (non-local) models run through ghost's local PII scrubber and then og-veil
 # (the opengradient-veil package), which encrypts each request over Oblivious-HTTP to
@@ -22,6 +22,7 @@
 #   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
 #   GHOST_SCRUB=1        opt in to OUTBOUND PII + secret redaction (OFF by default -- ghost is a
 #                        full-fidelity agent; og-veil's OHTTP+TEE provides the privacy regardless)
+#   GHOST_NO_BROWSER=1   skip Chromium + the computer-use driver (smaller, faster install)
 #   GHOST_CHAT_APP_URL=  override the website used for `ghost-login` (default chat.opengradient.ai)
 set -euo pipefail
 
@@ -47,7 +48,6 @@ if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
   fi
   exec bash "$SRC/install.sh" "$@"
 fi
-ENGINE_HOME="${ENGINE_HOME:-$HOME/.hermes}"   # where the Hermes engine installs (official installer default)
 GHOST_HOME="${GHOST_HOME:-$HOME/.ghost}"      # ghost's ISOLATED state (profiles, privacy, auth)
 PROFILE="$GHOST_HOME/profiles/uncensored"
 PRIV="$GHOST_HOME/privacy"
@@ -56,7 +56,7 @@ ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-}"   # resolved to an isolated uv venv (Python 3.11) in the Dependencies step
 SCRUBBER="http://127.0.0.1:8788"
 # Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
-# auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
+# auxiliary tasks route to a hosted model (abliteration/deepseek-v4.1-flash-abliterated) over the same private og-veil
 # path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
 # fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
 # since hosted-only is now the default.)
@@ -70,12 +70,16 @@ echo "$REPO" > "$GHOST_HOME/.src"
   [ -n "${GHOST_LOCAL:-}" ] && echo "GHOST_LOCAL=1"
   [ -n "${GHOST_LOCAL_32B:-}" ] && echo "GHOST_LOCAL_32B=1"
   [ -n "${GHOST_SCRUB:-}" ] && echo "GHOST_SCRUB=1"
+  [ -n "${GHOST_NO_BROWSER:-}" ] && echo "GHOST_NO_BROWSER=1"
   [ -n "${GHOST_CHAT_APP_URL:-}" ] && echo "GHOST_CHAT_APP_URL=$GHOST_CHAT_APP_URL"
   :
 } > "$GHOST_HOME/.install-env"
 
 say(){ printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
+
+# Nothing below runs while a ghost window is open: it would be left on a half-replaced engine.
+GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check
 
 # ---------- 0. dependencies (auto-installed) ----------
 say "Dependencies"
@@ -96,14 +100,6 @@ if [ -n "$WANT_LOCAL" ]; then
   sleep 1
 fi
 
-if [ ! -d "$ENGINE_HOME/hermes-agent" ] && ! have hermes; then
-  say "Installing the Hermes Agent engine (official one-liner)"
-  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash \
-    || { echo "!! engine install failed; install manually (https://hermes-agent.nousresearch.com) then re-run."; exit 1; }
-fi
-SRC="$ENGINE_HOME/hermes-agent"; [ -d "$SRC" ] || SRC="$(cd "$(dirname "$(command -v hermes)")/.." 2>/dev/null && pwd)"
-[ -d "$SRC" ] || { echo "!! can't locate the Hermes engine to fork."; exit 1; }
-
 # Privacy stack: og-veil (the opengradient-veil package) owns the whole hosted-inference protocol
 # -- on-chain TEE registry discovery, OHTTP/HPKE encryption, response verification, the Supabase
 # session. Declared in pyproject.toml + uv.lock, installed into an ISOLATED venv at ~/.ghost/venv
@@ -119,7 +115,11 @@ SYNC_EXTRAS=""
 PYTHON="$UV_PROJECT_ENVIRONMENT/bin/python"
 echo "   venv: Python $("$PYTHON" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))') · og-veil $("$PYTHON" -c 'import importlib.metadata as m;print(m.version("opengradient-veil"))' 2>/dev/null)"
 
-# ---------- 1. local models (OPT-IN via GHOST_LOCAL; 32B also needs GHOST_LOCAL_32B) ----------
+# ---------- 1. the engine ----------
+say "Building the engine (pinned Hermes release, debranded) -> $ENG"
+GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh"
+
+# ---------- 2. local models (OPT-IN via GHOST_LOCAL; 32B also needs GHOST_LOCAL_32B) ----------
 LOCAL_MODEL="ghost-tool:latest"
 if [ -z "$WANT_LOCAL" ]; then
   say "Hosted-only (default) -- skipping Ollama + local models. Set GHOST_LOCAL=1 for an offline / incognito local fallback."
@@ -130,37 +130,44 @@ else
     if [ "$opt" = "optional" ] && [ -z "${GHOST_LOCAL_32B:-}" ]; then
       echo "   skipping optional $alias (26GB) -- set GHOST_LOCAL_32B=1 to include the stronger local model"; continue
     fi
-    if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"; continue; fi
-    echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"
+    if ollama show "$alias" >/dev/null 2>&1; then echo "   $alias present"
+    else echo "   $src  ->  $alias"; ollama pull "$src"; ollama cp "$src" "$alias"; fi
+    # The engine refuses a window under 64K for tool use, and Ollama's own default is far smaller.
+    if ! ollama show --parameters "$alias" 2>/dev/null | grep -q '^num_ctx'; then
+      MODELFILE="$(mktemp)"; printf 'FROM %s\nPARAMETER num_ctx 65536\n' "$alias" > "$MODELFILE"
+      ollama create "$alias" -f "$MODELFILE" >/dev/null; rm -f "$MODELFILE"
+    fi
   done < "$REPO/models.txt"
   if ollama show uncensored-local >/dev/null 2>&1; then LOCAL_MODEL="uncensored-local:latest"; else LOCAL_MODEL="ghost-tool:latest"; fi
   echo "   local model = $LOCAL_MODEL"
 fi
 
-# ---------- 2. uncensored profile ----------
+# ---------- 3. uncensored profile ----------
 say "Writing the uncensored profile"
 mkdir -p "$PROFILE"
+for f in config.yaml SOUL.md; do [ ! -f "$PROFILE/$f" ] || cp -p "$PROFILE/$f" "$PROFILE/.$f.was"; done
 sed -e "s#__HOME__#$HOME#g" -e "s#__LOCAL_MODEL__#$LOCAL_MODEL#g" "$REPO/profile/config.yaml" > "$PROFILE/config.yaml"
 cp "$REPO/profile/SOUL.md" "$PROFILE/SOUL.md"
 [ -f "$PROFILE/.env" ] || cp "$REPO/profile/.env.example" "$PROFILE/.env"
+"$PYTHON" "$REPO/scripts/migrate_skills.py" "$GHOST_HOME" "$PROFILE"
 if [ -z "$WANT_LOCAL" ]; then   # hosted-only (default) -> route auxiliary + fallback to a hosted model via og-veil
   "$PYTHON" - "$PROFILE/config.yaml" <<'PYEOF'
 import sys, re
 p = sys.argv[1]; s = open(p).read()
 # Handle both key orders (provider-then-model and model-then-provider in the auxiliary blocks).
 s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
-           r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
+           r"provider: opengradient\n\1model: abliteration/deepseek-v4.1-flash-abliterated", s)
 s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
-           r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
+           r"model: abliteration/deepseek-v4.1-flash-abliterated\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-# Chat fallback -> the stronger 405B (aux tasks stay on 70B for speed/cost).
-s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b",
+# Chat fallback -> Hermes 405B (aux tasks stay on the cheap, fast DeepSeek V4.1 Flash Abliterated).
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )abliteration/deepseek-v4.1-flash-abliterated",
            r"\g<1>nous/hermes-4-405b", s, count=1)
-open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> nous/hermes-4-70b (via og-veil)")
+open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> abliteration/deepseek-v4.1-flash-abliterated (via og-veil)")
 PYEOF
 fi
 
-# ---------- 3. privacy stack (PII scrubber + og-veil) ----------
+# ---------- 4. privacy stack (PII scrubber + og-veil) ----------
 say "Privacy stack (PII/secret scrubber -> og-veil)"
 mkdir -p "$PRIV"
 cp "$REPO"/privacy/*.py "$PRIV/"
@@ -196,6 +203,12 @@ else
   rm -f "$PRIV/.scrub" "$PRIV/.no_scrub"
   say "Full-fidelity mode (default) -- no outbound redaction. Set GHOST_SCRUB=1 to strip your PII/secrets before the gateway."
 fi
+# This release's config.yaml + SOUL.md replace yours; what you had is kept beside them.
+for f in config.yaml SOUL.md; do
+  [ -f "$PROFILE/.$f.was" ] || continue
+  if cmp -s "$PROFILE/.$f.was" "$PROFILE/$f"; then rm -f "$PROFILE/.$f.was"
+  else mv -f "$PROFILE/.$f.was" "$PROFILE/$f.prev"; echo "   your previous $f is kept as $PROFILE/$f.prev"; fi
+done
 # Run the privacy services (scrubber :8788 + og-veil :11435) as managed, auto-restarting
 # background services -- launchd on macOS, systemd --user on Linux/WSL2 (with a plain
 # background-process fallback). Both talk to chat-api directly (content private via OHTTP/TEE).
@@ -232,10 +245,6 @@ for _ in $(seq 1 15); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 
 printf "   waiting for og-veil"
 for _ in $(seq 1 20); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:11435/health" 2>/dev/null)" = 200 ] && break; printf "."; sleep 1; done; echo " up (or pending ghost-login)"
 
-# ---------- 4. fork + debrand the engine ----------
-say "Forking + debranding the engine -> $ENG"
-GHOST_PYTHON="$PYTHON" GHOST_ENGINE="$ENG" HERMES_SRC="$SRC" bash "$REPO/scripts/fork-engine.sh"
-
 # ---------- 5. the ghost + ghost-login + ghost-update commands ----------
 say "Installing the ghost + ghost-login + ghost-update commands"
 mkdir -p "$HOME/.local/bin"
@@ -243,6 +252,8 @@ sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__ENG__#$ENG#g" -e
 sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-login" > "$HOME/.local/bin/ghost-login"
 sed -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-update" > "$HOME/.local/bin/ghost-update"
 chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login" "$HOME/.local/bin/ghost-update"
+
+GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --refresh-gateway
 
 # ---------- 6. connect your account (hosted models) ----------
 say "Connect your OpenGradient Chat account (for hosted models)"
@@ -261,11 +272,15 @@ fi
 
 # ---------- 7. smoke test ----------
 say "Smoke test"
-"$HOME/.local/bin/ghost" --yolo -z "Reply with one word: hi" 2>&1 | tail -2 || true
+if "$GL" --status >/dev/null 2>&1 && curl -sf -o /dev/null --max-time 3 http://127.0.0.1:11435/health; then
+  "$HOME/.local/bin/ghost" --yolo -z "Reply with one word: hi" 2>&1 | tail -2 || true
+else
+  echo "   skipped -- it needs a connected account (run 'ghost-login', then 'ghost')"
+fi
 
 say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
+echo "   Hosted default = abliteration/abliterated-model-large-v2 via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
 echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
 echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
 echo "   Not connected yet? Run:  ghost-login"

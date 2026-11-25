@@ -35,6 +35,8 @@ ghost           # start chatting (default: Abliterated Large v2, private via the
 
 Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`.
 
+Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips those downloads. An update installs that release's `config.yaml` and `SOUL.md`; yours are kept beside them as `.prev`.
+
 ## Why ghost exists
 
 ### Problem #1: The Model Lectures You Instead of Working
@@ -79,8 +81,8 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 |---|---|
 | `abliteration/abliterated-model-large-v2` **(default)** | Uncensored by abliteration, with refusals removed from the weights rather than steered past. 1M context; built for authorized offensive-security, red-team and long-horizon agent work. |
 | `deepseek/deepseek-v4-pro` | Strongest open reasoning + coding model; uncensored via ghost's steer. |
+| `abliteration/deepseek-v4.1-flash-abliterated` | Fast, very low-cost abliterated DeepSeek; runs ghost's auxiliary tasks (titles, compression, etc.). |
 | `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback. |
-| `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
 | local (opt-in) | Abliterated 7B / 32B via `GHOST_LOCAL`, fully offline, zero egress. |
 
 ## How the private path works
@@ -104,7 +106,8 @@ Two boundaries, the same path the [chat.opengradient.ai](https://chat.opengradie
 
 - **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`.
 - **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
-- **The engine is forked, not rewritten.** Internal package names stay `hermes_cli`, and `ghost update` (not `hermes update`) is what refreshes the fork.
+- **The engine is forked, not rewritten.** It's one pinned Hermes release ([`engine.pin`](engine.pin)), patched and self-contained: no separate Hermes install is needed or touched, and `ghost update` is what moves it. Internal package names stay `hermes_cli`.
+- **A session runs in a background gateway.** ghost starts one local process for it, and it exits by itself after 10 idle minutes (unless you install it as a service with `ghost gateway install`).
 
 ## License
 
