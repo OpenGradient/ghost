@@ -84,14 +84,14 @@ class Box:
             time.sleep(0.05)
         return proc
 
-    def service(self, running):
+    def service(self, running, runs=None):
         if running:
             (self.home / "gateway-on").touch()
         rel = ("Library/LaunchAgents/ai.hermes.gateway-uncensored.plist" if platform.system() == "Darwin"
                else ".config/systemd/user/hermes-gateway-uncensored.service")
         unit = self.home / rel
         unit.parent.mkdir(parents=True)
-        unit.write_text(f"{self.engine}/.hermes/bin/hermes --profile uncensored gateway run")
+        unit.write_text(runs or f"{self.engine}/.hermes/bin/hermes --profile uncensored gateway run")
 
 
 @pytest.fixture
@@ -234,6 +234,22 @@ def test_running_gateway_is_stopped_then_restarted_on_the_new_engine(box):
     assert box.run("--refresh-gateway").returncode == 0
     assert box.calls()[-1] == "-p uncensored gateway install --force --start-now --start-on-login"
     assert not box.restart.exists()
+
+
+def test_a_gateway_an_old_ghost_ran_from_elsewhere_is_moved_too(box):
+    """On Linux it ran from ~/.hermes/hermes-agent, with ghost's state. Left alone it stayed stopped."""
+    assert box.run(src=box.source("one")).returncode == 0
+    box.service(running=True, runs=f"HERMES_HOME={box.state}/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main")
+    assert box.run(src=box.source("two")).returncode == 0 and box.restart.exists()
+    assert box.run("--refresh-gateway").returncode == 0
+    assert box.calls()[-1] == "-p uncensored gateway install --force --start-now --start-on-login"
+
+
+def test_someone_elses_gateway_is_not_touched(box):
+    assert box.run(src=box.source("one")).returncode == 0
+    box.service(running=True, runs=f"HERMES_HOME={box.home}/.hermes/profiles/uncensored\n{box.home}/.hermes/hermes-agent/venv/bin/python")
+    assert box.run(src=box.source("two")).returncode == 0 and not box.restart.exists()
+    assert box.run("--refresh-gateway").returncode == 0 and not [c for c in box.calls() if "gateway install" in c]
 
 
 def test_gateway_is_started_again_when_the_build_fails(box):

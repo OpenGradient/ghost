@@ -36,7 +36,8 @@ case "$(uname -s)" in
   *)      UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
           service_running() { systemctl --user is-active --quiet hermes-gateway-uncensored.service 2>/dev/null; } ;;
 esac
-service_installed() { [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; }
+# Ours, whichever engine it runs: an old ghost on Linux ran its gateway from ~/.hermes, with ghost's state.
+service_installed() { [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$UNIT"; }
 
 # The engine's package manager must see only its own toolchain: install.sh exports
 # UV_PROJECT_ENVIRONMENT for ghost's privacy venv, and uv would happily sync the engine into it.

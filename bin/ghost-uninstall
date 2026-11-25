@@ -50,7 +50,7 @@ if [ -x "$ENG/.hermes/bin/hermes" ]; then
   HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway stop </dev/null >/dev/null 2>&1
   UNIT="$HOME/Library/LaunchAgents/ai.hermes.gateway-uncensored.plist"
   [ -f "$UNIT" ] || UNIT="$HOME/.config/systemd/user/hermes-gateway-uncensored.service"
-  if [ -f "$UNIT" ] && grep -qF "$ENG/" "$UNIT"; then
+  if [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$UNIT"; then
     HERMES_HOME="$GHOST_HOME" "$ENG/.hermes/bin/hermes" -p uncensored gateway uninstall </dev/null >/dev/null 2>&1
   fi
 fi
