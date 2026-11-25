@@ -74,11 +74,13 @@ jobs:
           profile="$HOME/.ghost/profiles/uncensored"; echo "# mine" >> "$profile/SOUL.md"; "$ghost" config set display.show_reasoning true
           "$ghost" gateway install --start-now --start-on-login
           sleep 15; "$ghost" gateway status; before="$(pid)"; kill -0 "$before"
+          if ps -o command= -p "$before" | grep -e --idle-exit; then exit 1; fi   # it's not the one the chat left running
           started=$SECONDS; ./install.sh   # nothing new: the engine isn't built again, and the gateway is left alone
           grep -q "already this build" "$HOME/.ghost/install.log"; echo "took $((SECONDS - started))s"; test $((SECONDS - started)) -lt 30
           test "$(pid)" = "$before"; kill -0 "$before"
           GHOST_FORCE=1 GHOST_VERBOSE=1 ./install.sh
           sleep 15; "$ghost" gateway status; after="$(pid)"; kill -0 "$after"
+          if ps -o command= -p "$after" | grep -e --idle-exit; then exit 1; fi
           test "$before" != "$after"; if kill -0 "$before" 2>/dev/null; then exit 1; fi
           test ! -e "$HOME/.ghost/.restart-gateway"
           grep -q "# mine" "$profile/SOUL.md"; grep -q "show_reasoning: true" "$profile/config.yaml"; if ls "$profile"/*.prev*; then exit 1; fi

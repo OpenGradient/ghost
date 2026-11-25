@@ -265,6 +265,22 @@ def run_engine(args, provider="opengradient"):
     return subprocess.call(command)
 
 
+def make_way(args):
+    """A chat's own gateway outlives it by ten minutes, and the one that's to stay can't start beside it."""
+    if args[:1] != ["gateway"] or args[1:2] not in (["install"], ["start"], ["restart"], ["setup"]) or {"--no-start-now", "-h", "--help"} & set(args):
+        return
+    try:
+        if "--idle-exit" not in json.loads((PROFILE / "gateway.pid").read_text(encoding="utf-8"))["argv"]:
+            return
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    engine = engine_binary()
+    stop = [str(engine), "-p", "uncensored", "gateway", "stop"]   # (which it won't, in the middle of something)
+    if engine and subprocess.run(stop, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode \
+            and (PROFILE / "gateway.pid").exists():
+        say("a chat is busy, and the background gateway can't start beside it. Run this again when it's done.")
+
+
 def run_local(args, config):
     model = local_model(config)
     ollama = shutil.which("ollama") or "/opt/homebrew/bin/ollama"
@@ -336,6 +352,7 @@ def main(argv):
     if local:
         return run_local(args, config)
     if not starts_a_chat(args):
+        make_way(args)
         return run_engine(args)
     if not default_model(config) or "\n  opengradient:\n" not in config:
         say(f"ghost's settings ({PROFILE / 'config.yaml'}) are missing or damaged. Put them back with: ghost update")

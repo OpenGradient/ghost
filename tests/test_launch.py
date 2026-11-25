@@ -1,4 +1,5 @@
 """The launcher: what runs the engine, what asks for a login first, and what must contact nobody."""
+import json
 import os
 import socket
 import subprocess
@@ -90,6 +91,38 @@ def test_a_chat_needs_a_login_and_says_so_at_once(box, capsys, args):
 def test_everything_else_works_without_one(box, args):
     assert launch.main(args) == 0
     assert (box.ran, box.started) == ([args], [])   # and contacts nobody, not even the bridge
+
+
+@pytest.mark.parametrize("argv, args, stops", [
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--start-now"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "start"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "setup"], True),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--no-start-now"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "install", "--help"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "status"], False),
+    (["gateway", "run", "--quiet", "--idle-exit"], ["gateway", "stop"], False),
+    (["gateway", "run"], ["gateway", "install"], False),   # the one that's to stay
+    (None, ["gateway", "install"], False),
+])
+def test_a_chats_own_gateway_makes_way_for_the_one_you_set_up(box, monkeypatch, capsys, argv, args, stops):
+    """It idles on for ten minutes, or for good with Telegram in it, and the service couldn't start until it left."""
+    record, calls, busy = box.profile / "gateway.pid", [], []
+    if argv:
+        record.write_text(json.dumps({"pid": 1, "argv": argv}))
+
+    def run(command, **how):
+        calls.append(command[1:])
+        if not busy:
+            record.unlink()
+        return SimpleNamespace(returncode=1 if busy else 0)
+    monkeypatch.setattr(launch, "engine_binary", lambda: Path("engine"))
+    monkeypatch.setattr(launch.subprocess, "run", run)
+    assert launch.main(args) == 0 and box.ran == [args]
+    assert calls == ([["-p", "uncensored", "gateway", "stop"]] if stops else [])
+    if stops:
+        busy.append(1)   # in the middle of something
+        record.write_text(json.dumps({"pid": 1, "argv": argv}))
+        assert launch.main(args) == 0 and "Run this again when it's done" in capsys.readouterr().err
 
 
 def test_a_terminal_is_asked_to_log_in_first(box, monkeypatch):
