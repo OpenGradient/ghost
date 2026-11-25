@@ -48,10 +48,15 @@ HERMES_VERSION="" HERMES_COMMIT=""
 # Is ghost open on this engine? A process keeps importing from the engine's path for as long as it
 # runs, so swapping the tree underneath one would mix two releases in it. The background gateway
 # doesn't count: it is ours to stop and start again.
+processes() {   # minimal systems have no `ps`
+  if command -v ps >/dev/null 2>&1; then ps axww -o pid=,command=; return; fi
+  local dir
+  for dir in /proc/[0-9]*; do printf '%s %s\n' "${dir#/proc/}" "$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null)"; done
+}
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
   local pids   # launched by path, or as `python -c "... '<engine>' ..."`
-  pids="$(ps axww -o pid=,command= 2>/dev/null | awk -v e="$ENG" \
+  pids="$( (processes 2>/dev/null || true) | awk -v e="$ENG" \
     '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2

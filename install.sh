@@ -168,7 +168,9 @@ check_machine() {
   need_git
   have curl || die "ghost needs curl: install it with your package manager, then run this again."
   local open
-  open="$(GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check 2>&1)" || die "${open#!! }"
+  if ! open="$(GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check 2>&1)"; then
+    case "$open" in "!! ghost is open"*) die "${open#!! }" ;; *) echo "$open"; return 1 ;; esac
+  fi
   if ! have uv; then   # it brings the bridge's own Python, so the system's never matters
     curl -LsSf https://astral.sh/uv/install.sh | sh
     PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
@@ -236,6 +238,12 @@ free_port() {   # stopping a service finishes in its own time, and two bridges c
   done
 }
 
+stop_bridge() {   # whichever process holds the port, as it says itself (minimal systems have no `pkill`)
+  local pid
+  pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p' || true)"
+  [ -z "$pid" ] || kill "$pid" || true
+}
+
 fill() { sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" -e "s#__ENG__#$ENG#g" "$1"; }
 
 # The bridge runs in the background and restarts by itself: launchd on macOS, systemd on Linux. Where neither
@@ -270,8 +278,9 @@ start_service() {
     systemctl --user restart ghost-bridge.service
     loginctl enable-linger "$(id -un)" || true   # so it's there after a reboot, before you log in
   else
-    pkill -f "$PRIV/scrubbing_proxy.py" || true
-    pkill -f "veil serve --foreground --skip-setup --port 11435" || true   # older releases'
+    stop_bridge
+    pkill -f "$PRIV/scrubbing_proxy.py" || true   # older releases' bridge and og-veil
+    pkill -f "veil serve --foreground --skip-setup --port 11435" || true
     free_port
   fi
   "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())' "$PRIV" \

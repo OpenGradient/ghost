@@ -28,7 +28,8 @@ case "${1:-}" in
 esac
 echo "compiling the engine"
 [ ! -e "$HOME/engine-broken" ] || { echo "the reason it broke"; exit 3; }
-mkdir -p "$GHOST_ENGINE/.hermes/bin"
+mkdir -p "$GHOST_ENGINE/.hermes/bin" "$GHOST_HOME/profiles/uncensored"
+[ -e "$GHOST_HOME/profiles/uncensored/SOUL.md" ] || echo "the engine's default" > "$GHOST_HOME/profiles/uncensored/SOUL.md"
 printf '{"distribution": "ghost"}' > "$GHOST_ENGINE/install-stamp.json"
 printf '#!/bin/sh\necho "engine $*" >> "$HOME/calls"\necho "Ghost v9"\n' > "$GHOST_ENGINE/.hermes/bin/hermes"
 chmod +x "$GHOST_ENGINE/.hermes/bin/hermes"
@@ -105,6 +106,7 @@ def test_fresh_install(machine, system):
                  "Starting the background service", "Installing the ghost command"):
         assert f"✓ {step}" in done.stdout
     assert "It asks you to log in the first time" in done.stdout and "compiling the engine" not in done.stdout
+    assert "previous" not in done.stdout and "Ghost" in (m.profile / "SOUL.md").read_text()
     assert "compiling the engine" in (m.ghost / "install.log").read_text()
     for name in ("ghost", "ghost-login", "ghost-update", "ghost-uninstall"):
         assert os.access(m.commands / name, os.X_OK) and "__" not in (m.commands / name).read_text()
@@ -216,6 +218,13 @@ def test_nothing_changes_under_an_open_ghost(machine):
     done = m.install()
     assert done.returncode == 1 and "✗ ghost is open (pid 42). Close those windows" in done.stdout
     assert m.calls() == before + ["fork-engine --check browser=yes"]
+
+
+def test_a_failed_check_is_not_taken_for_an_open_ghost(machine):
+    m = machine()
+    (m.repo / "scripts" / "fork-engine.sh").write_text("#!/bin/bash\necho something else broke >&2\nexit 1\n")
+    done = m.install()
+    assert done.returncode == 1 and "✗ Checking this machine" in done.stdout and "something else broke" in done.stdout
 
 
 def test_path_hint(machine):

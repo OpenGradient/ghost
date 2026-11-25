@@ -89,6 +89,7 @@ def bridge(enclave):
                 return resp.status, resp.read().decode()
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())["error"]["message"]
+    ask.url = f"http://127.0.0.1:{server.server_port}"
     yield ask
     server.shutdown()
     server.server_close()
@@ -215,6 +216,11 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     monkeypatch.setattr(sp.ghost_auth, "api_key", lambda: token if login["mode"] == "api_key" else None)
     status, message = bridge()
     assert (status, seen) == (402, [(relay, f"Bearer {token}")]) and words in message
+
+
+def test_the_bridge_says_which_process_it_is(bridge):
+    with urllib.request.urlopen(bridge.url + "/healthz", timeout=5) as resp:
+        assert (resp.read(), resp.headers["X-Ghost-Pid"]) == (b"ok", str(os.getpid()))
 
 
 def test_a_web_page_cannot_spend_your_credits(enclave, bridge):

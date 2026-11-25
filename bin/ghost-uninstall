@@ -68,7 +68,9 @@ else
   done
   systemctl --user daemon-reload >/dev/null 2>&1
 fi
-pkill -f "$GHOST_HOME/privacy/scrubbing_proxy.py" 2>/dev/null
+# One `ghost` started itself, where there is no service manager.
+pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p')"
+[ -z "$pid" ] || kill "$pid" 2>/dev/null
 
 echo "Removing files"
 for dir in "$ENG" "$ENG.old" "$ENG.new"; do

@@ -27,10 +27,10 @@ def config(ghost_home, local_model=None, scrub=False):
     return text
 
 
-def install(path, text):
+def install(path, text, keep=True):
     """Returns where the previous version went, if it differed."""
     previous = None
-    if path.exists():
+    if path.exists() and keep:
         if path.read_bytes() == text.encode("utf-8"):
             return None
         previous = path.with_name(path.name + ".prev")
@@ -47,9 +47,10 @@ def main(argv=None):
     parser.add_argument("--scrub", action="store_true")
     args = parser.parse_args(argv)
     args.profile.mkdir(parents=True, exist_ok=True)
+    yours = (args.profile / "config.yaml").exists()   # in a new profile, a SOUL.md is only the engine's default
     for name, text in (("config.yaml", config(args.ghost_home, args.local_model, args.scrub)),
                        ("SOUL.md", (SOURCE / "SOUL.md").read_text(encoding="utf-8"))):
-        previous = install(args.profile / name, text)
+        previous = install(args.profile / name, text, keep=yours)
         if previous:
             print(f"your previous {name} is kept as {previous}")
     env = args.profile / ".env"
