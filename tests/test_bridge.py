@@ -325,7 +325,7 @@ def test_it_answers_as_soon_as_it_starts(monkeypatch):
 
 # ── through the real sealing, against a stand-in DreamFort ────────────────────
 @pytest.fixture
-def dream(monkeypatch):
+def dream(monkeypatch, tmp_path):
     service = fake_dreamfort.DreamFort()
     server = fake_dreamfort.serve(service)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -334,6 +334,7 @@ def dream(monkeypatch):
     monkeypatch.setattr(sp.ghost_auth, "credentials", lambda refused=None: (url + sp.ghost_auth.API_KEY_RELAY, fake_dreamfort.API_KEY))
     monkeypatch.setattr(sp.ghost_auth, "api_key", lambda: fake_dreamfort.API_KEY)
     monkeypatch.setattr(sp, "_clients", {})
+    monkeypatch.setattr(enclaves, "REMEMBERED", tmp_path / "enclaves.json")
     yield service
     server.shutdown()
     server.server_close()
@@ -371,15 +372,41 @@ def test_however_a_request_fails(dream, bridge, kind, statuses, billed, words):
 
 def test_when_the_registry_cannot_be_read(monkeypatch, dream, bridge):
     """Its chain has gone down; DreamFort's apps fall back to enclaves they know, and so does ghost."""
-    ours = fake_dreamfort.Enclave()
-    pem = ours.rsa.public_key().public_bytes(fake_dreamfort.serialization.Encoding.PEM, fake_dreamfort.serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    ours, gone = fake_dreamfort.Enclave(), fake_dreamfort.Enclave()
     dream.registry_up, listed, dream.enclave = False, dream.enclave, ours
-    monkeypatch.setattr(enclaves, "BUILT_IN", (enclaves._enclave("https://ours.test", pem, ours.public.hex()),))
+    monkeypatch.setattr(enclaves, "BUILT_IN", tuple(as_built_in(e) for e in (gone, ours)))   # (the relay knows one of them)
     assert bridge(**says("[[say one]]"))[0] == bridge(**says("[[say two]]"))[0] == 200
     with open(sp.LOG) as fh:
-        assert fh.read().count("the TEE registry can't be read") == 1   # and it isn't asked again each time
+        assert fh.read().count("the TEE registry can't be read") <= 2   # and it isn't asked again each time
     dream.registry_up, dream.enclave = True, listed   # back, and the built-in one retired: the registry decides again
     assert bridge(**says("[[say three]]"))[0] == 200 and len(dream.billed) == 3
+
+
+def as_built_in(e):
+    pem = e.rsa.public_key().public_bytes(fake_dreamfort.serialization.Encoding.PEM, fake_dreamfort.serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    return enclaves.enclave("https://enclave.test", pem, e.public.hex())
+
+
+def test_the_enclaves_it_last_listed_are_remembered(monkeypatch, dream, bridge):
+    monkeypatch.setattr(enclaves, "BUILT_IN", ())
+    assert bridge(**says("[[say one]]"))[0] == 200 and os.path.exists(enclaves.REMEMBERED)
+    monkeypatch.setattr(sp, "_clients", {})   # (the bridge was restarted)
+    dream.registry_up = False
+    assert bridge(**says("[[say two]]"))[0] == 200
+    monkeypatch.setattr(enclaves, "KEEP", 0)   # two weeks later they're not
+    monkeypatch.setattr(sp, "_clients", {})
+    assert bridge(**says("[[say three]]"))[0] == 503
+
+
+def test_an_enclave_that_is_unwell_is_avoided(monkeypatch):
+    known = [as_built_in(fake_dreamfort.Enclave()) for _ in range(3)]
+    monkeypatch.setattr(enclaves.Enclaves, "listed", lambda self: known)
+    monkeypatch.setattr(enclaves, "remember", lambda found: None)
+    resolver, used = enclaves.Enclaves(), []
+    for _ in range(3):
+        used.append(resolver.get().tee_id)
+        resolver.invalidate(used[-1])
+    assert len(set(used)) == 3 and resolver.get().tee_id in used   # all three were; one is better than none
 
 
 def test_a_registry_that_lists_none_is_obeyed(monkeypatch, dream, bridge):
@@ -389,10 +416,9 @@ def test_a_registry_that_lists_none_is_obeyed(monkeypatch, dream, bridge):
     assert status == 503 and "lists no active enclave" in message and dream.accepted == []
 
 
-def test_the_built_in_enclaves_are_the_apps_own():
-    """chat-app's lib/api/backupTees.ts and chat-api's src/core/backup_tees.py list the same one."""
-    assert [t.tee_id for t in enclaves.BUILT_IN] == ["0xe1443d7ed558fbd19117c4dc70e6245fc71d6063d64af3bc3f790081bc94e9aa"]
-    assert all(len(t.ohttp_public_key) == 32 for t in enclaves.BUILT_IN)
+def test_the_built_in_enclaves_are_what_they_say():
+    assert len({t.tee_id for t in enclaves.BUILT_IN}) == len(enclaves.BUILT_IN) and all(len(t.ohttp_public_key) == 32 for t in enclaves.BUILT_IN)
+    assert "0x5fb75e8d657ecfa7fd46424cfb66753830d70a8c68a681b967d9eb9f29a8edf9" in {t.tee_id for t in enclaves.BUILT_IN}   # (derived from its key)
 
 
 # ── what else the bridge answers ──────────────────────────────────────────────

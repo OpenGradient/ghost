@@ -307,6 +307,7 @@ def machine(dream, tmp_path, monkeypatch):
     import bridge
     import enclaves
     monkeypatch.setattr("enclaves.Enclaves.listed", lambda self: [1, 2, 3])
+    monkeypatch.setattr("enclaves.REMEMBERED", tmp_path / "enclaves.json")
     monkeypatch.setattr(ghost_auth, "BRIDGE_KEY_FILE", tmp_path / "bridge.key")
     monkeypatch.setattr(bridge, "LOG", str(tmp_path / "bridge.log"))
     server = bridge.LocalServer(("127.0.0.1", 0), bridge.Handler)

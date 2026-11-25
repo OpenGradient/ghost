@@ -130,7 +130,7 @@ else
   for dir in venv tools installs cache python uv privacy/__pycache__; do rm -rf "${GHOST_HOME:?}/$dir"; done
   rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/.linger" "$GHOST_HOME/install.log" "$GHOST_HOME"/privacy/*.py \
         "$GHOST_HOME/privacy/uncensored_prefill.json" "$GHOST_HOME/privacy/bridge.key" "$GHOST_HOME/privacy/.made" \
-        "$GHOST_HOME/privacy/proxies.json" "$GHOST_HOME"/privacy/bridge.log*
+        "$GHOST_HOME/privacy/proxies.json" "$GHOST_HOME/privacy/enclaves.json" "$GHOST_HOME"/privacy/bridge.log*
   echo "ghost is gone. Your chats, skills, settings and login are still in $GHOST_HOME (delete it to remove them too)."
 fi
 rm -f "$BIN/ghost-uninstall"

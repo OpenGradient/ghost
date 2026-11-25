@@ -70,10 +70,10 @@ def relay():
 
 
 def enclaves():
-    """The registry says which enclaves there are. Without it, ghost has some built in."""
+    """The registry says which enclaves there are. Without it, ghost goes by what it said before."""
     listed = _found.get("enclaves")
     if listed is None:
-        return None, "the registry can't be read right now, so the one built into ghost is used", None
+        return None, "the registry can't be read right now, so one known from before is used", None
     return (True, f"{listed} in the registry", None) if listed else (False, "the registry lists none right now; try again later", None)
 
 
