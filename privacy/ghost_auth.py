@@ -9,8 +9,10 @@ Both files are 0600. An API key wins while both are present; logging in with an 
 A login says who you are, never where your requests go or which enclaves to trust: those are fixed here and
 in opengradient-ohttp, so a login you were tricked into accepting can't point ghost at an impostor.
 """
+import hmac
 import json
 import os
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -21,6 +23,7 @@ ACCOUNT_RELAY, API_KEY_RELAY = "/api/v1/chat/ohttp", "/api/v1/developer/ohttp"
 BUNDLE_TYPE = "opengradient-cli-auth"   # what the website's /cli-auth page hands to a CLI
 
 KEY_FILE = Path(os.environ.get("GHOST_HOME") or Path.home() / ".ghost") / "privacy" / "dreamfort_api_key"
+BRIDGE_KEY_FILE = KEY_FILE.with_name("bridge.key")
 SESSION_FILE = Path(os.environ.get("OG_VEIL_HOME") or Path.home() / ".opengradient" / "veil") / "session.json"
 
 CREDITS_URL = "https://www.dreamfort.ai/dashboard/credits"
@@ -61,6 +64,17 @@ def _write_private(path, text):
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     os.replace(tmp, path)
+
+
+def bridge_proof(nonce):
+    """What only your own bridge can answer. Its port may be held by another program, or by the ghost of someone
+    else on this machine, and neither may have your prompts."""
+    try:
+        key = BRIDGE_KEY_FILE.read_text(encoding="utf-8")
+    except OSError:
+        key = secrets.token_hex(32)
+        _write_private(BRIDGE_KEY_FILE, key)
+    return hmac.new(key.encode(), nonce.encode(), "sha256").hexdigest()
 
 
 # ── API key ───────────────────────────────────────────────────────────────────

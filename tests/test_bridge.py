@@ -324,7 +324,13 @@ def test_a_nonsense_limit_is_the_usual_one(enclave, bridge, asked):
 
 def test_the_bridge_says_which_process_it_is(bridge):
     with urllib.request.urlopen(bridge.url + "/healthz", timeout=5) as resp:
-        assert (resp.read(), resp.headers["X-Ghost-Pid"]) == (b"ok", str(os.getpid()))
+        assert (resp.read(), resp.headers["X-Ghost-Pid"], resp.headers["X-Ghost-Proof"]) == (b"ok", str(os.getpid()), None)
+
+
+def test_the_bridge_proves_that_it_is_yours(monkeypatch, tmp_path, bridge):
+    monkeypatch.setattr(sp.ghost_auth, "BRIDGE_KEY_FILE", tmp_path / "bridge.key")
+    with urllib.request.urlopen(bridge.url + "/healthz?nonce", timeout=5) as resp:
+        assert resp.headers["X-Ghost-Proof"] == sp.ghost_auth.bridge_proof("nonce") != sp.ghost_auth.bridge_proof("other")
 
 
 def test_a_web_page_cannot_spend_your_credits(enclave, bridge):

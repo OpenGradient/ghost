@@ -1,9 +1,9 @@
 #!/bin/sh
 # ghost -- the command. privacy/launch.py does the work; `update` and `uninstall` don't go through it
 # because they replace or remove the very Python it runs on.
-export GHOST_HOME="__GHOST_HOME__" GHOST_ENGINE="__ENG__"
+export GHOST_HOME=__GHOST_HOME__ GHOST_ENGINE=__ENG__
 case "${1:-}" in
   update)    shift; exec "$HOME/.local/bin/ghost-update" "$@" ;;
   uninstall) shift; exec "$HOME/.local/bin/ghost-uninstall" "$@" ;;
 esac
-exec "__PYTHON__" -Es "$GHOST_HOME/privacy/launch.py" "$@"
+exec __PYTHON__ -Es "$GHOST_HOME/privacy/launch.py" "$@"

@@ -418,11 +418,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(status, {"error": {"message": message}})
 
     def do_GET(self):
-        if self.path == "/healthz":
+        path, _, nonce = self.path.partition("?")
+        if path == "/healthz":
             body = b"ok"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("X-Ghost-Pid", str(os.getpid()))   # how the installer finds us to replace us
+            if nonce:
+                self.send_header("X-Ghost-Proof", ghost_auth.bridge_proof(nonce[:64]))
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
             self.end_headers()
@@ -546,6 +549,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    try:
+        if os.path.getsize(LOG) > 5_000_000:
+            os.replace(LOG, LOG + ".1")
+    except OSError:
+        pass
     spend.prune()
+    try:
+        server = LocalServer(LISTEN, Handler)
+    except OSError as e:
+        log(f"can't listen on {LISTEN[0]}:{LISTEN[1]}: {e}")
+        raise SystemExit(1)
     log(f"bridge up on {LISTEN[0]}:{LISTEN[1]}")
-    LocalServer(LISTEN, Handler).serve_forever()
+    server.serve_forever()

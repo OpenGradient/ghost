@@ -39,7 +39,7 @@ The first run asks how you want to log in. Nothing is contacted before that.
 | **DreamFort account** | Your plan and credits. ghost shows a code, you type it on [dreamfort.ai](https://www.dreamfort.ai), done. Works over SSH too. |
 | **DreamFort API key** | Billed by usage. Create one at [api.dreamfort.ai](https://api.dreamfort.ai/api-keys) and paste it. |
 
-`ghost login` switches between them. In a script or a container: `ghost-login --with-api-key < keyfile`.
+`ghost login` switches between them. In a script or a container: `cat keyfile | ghost-login --with-api-key`.
 
 ## Everyday commands
 

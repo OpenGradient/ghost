@@ -41,6 +41,7 @@ service_installed() { [ -f "$UNIT" ] && grep -qF -e "$ENG/" -e "$GHOST_HOME/" "$
 
 # The engine's package manager must see only its own toolchain: install.sh exports
 # UV_PROJECT_ENVIRONMENT for ghost's privacy venv, and uv would happily sync the engine into it.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_NAMESPACE   # some other repository's
 unset UV_PROJECT_ENVIRONMENT VIRTUAL_ENV PYTHONHOME PYTHONPATH HERMES_RUNTIME_DIR HERMES_INSTALL_DIR \
       HERMES_INSTALL_ROOT HERMES_REVISION HERMES_PROFILE
 
@@ -51,16 +52,30 @@ HERMES_VERSION="" HERMES_COMMIT=""
 # Is ghost open on this engine? A process keeps importing from the engine's path for as long as it
 # runs, so swapping the tree underneath one would mix two releases in it. The background gateway
 # doesn't count: it is ours to stop and start again.
-processes() {   # minimal systems have no `ps`
-  if command -v ps >/dev/null 2>&1; then ps axww -o pid=,command=; return; fi
-  local dir
-  for dir in /proc/[0-9]*; do printf '%s %s\n' "${dir#/proc/}" "$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null)"; done
+processes() {   # each one's pid, parent and command (minimal systems have no `ps`)
+  if command -v ps >/dev/null 2>&1; then ps axww -o pid=,ppid=,command=; return; fi
+  local dir parent
+  for dir in /proc/[0-9]*; do
+    parent="$(sed -n 's/^PPid:[^0-9]*//p' "$dir/status" 2>/dev/null || true)"
+    printf '%s %s %s\n' "${dir#/proc/}" "${parent:-0}" "$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null)"
+  done
 }
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
-  local pids   # launched by path, or as `python -c "... '<engine>' ..."`
-  pids="$( (processes 2>/dev/null || true) | awk -v e="$ENG" \
-    '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
+  # Launched by path (through a link, perhaps), or as `python -c "... '<engine>' ..."`. What the gateway started isn't a
+  # window either, nor is the reaper that goes with every engine process.
+  local pids
+  pids="$( (processes 2>/dev/null || true) | awk -v e="$ENG" -v r="$(cd "$ENG" && pwd -P)" -v h="$GHOST_HOME/tools/" -v hr="$(cd "$GHOST_HOME" 2>/dev/null && pwd -P)/tools/" '
+    { parent[$1] = $2; engine[$1] = index($0, e "/") || index($0, e "\047") || index($0, r "/") || index($0, r "\047")
+      gateway[$1] = (engine[$1] || index($0, h) || index($0, hr)) && /gateway run/; reaper[$1] = /process_supervisor[.]sh/ }
+    END {
+      for (p in engine) {
+        if (!engine[p] || reaper[p]) continue
+        q = p; hops = 0
+        while ((q in parent) && !gateway[q] && hops++ < 64) q = parent[q]
+        if (!gateway[q]) print p
+      }
+    }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2
   return 1
@@ -87,10 +102,20 @@ case "${1:-}" in
   "") ;;
   *) echo "usage: fork-engine.sh [--check | --refresh-gateway]" >&2; exit 2 ;;
 esac
+# A build that was killed part-way left the engine it was replacing set aside: put that one back first.
+ours() { [ -f "$1/install-stamp.json" ] || [ -d "$1/hermes_cli" ] || [ -e "$1/venv/bin/hermes" ]; }
+if [ -d "$OLD" ] && ours "$OLD"; then
+  if ! launches >/dev/null 2>&1; then rm -rf "$ENG"; mv "$OLD" "$ENG"; else rm -rf "$OLD"; fi
+fi
 if current; then echo "==> the engine is already this build: $ENG"; exit 0; fi
+if [ -e "$ENG" ] && ! ours "$ENG" && [ -n "$(ls -A "$ENG" 2>/dev/null)" ]; then
+  echo "!! $ENG is there already, and it isn't an engine ghost built. Move it away (or set GHOST_ENGINE) and run this again." >&2
+  exit 1
+fi
 check_closed
 
 # ---------- 1. fetch ----------
+trap 'exit 130' INT TERM HUP   # so that the traps below run, whatever stops this
 trap 'rm -rf "$NEW"' EXIT   # a build that stops here leaves the current engine untouched
 rm -rf "$NEW"; mkdir -p "$(dirname "$NEW")" "$GHOST_HOME"
 if [ -n "${HERMES_SRC:-}" ]; then
@@ -141,15 +166,13 @@ cat > "$NEW/install-stamp.json" <<STAMP
 STAMP
 
 # ---------- 3. stop the background gateway, then swap the trees ----------
-# A build that was killed part-way left the engine it was replacing set aside: put that one back first.
-if [ -d "$OLD" ] && ! launches >/dev/null 2>&1; then rm -rf "$ENG"; mv "$OLD" "$ENG"; fi
-rm -rf "$OLD"
-
+check_closed   # (that took a while)
 OLD_BIN=""
 for bin in "$LAUNCH" "$ENG/venv/bin/hermes"; do [ -x "$bin" ] && { OLD_BIN="$bin"; break; }; done
-old_engine() { HERMES_HOME="$GHOST_HOME" "$OLD_BIN" -p uncensored "$@" </dev/null >/dev/null 2>&1 || true; }
+old_engine() { HERMES_HOME="$GHOST_HOME" "$OLD_BIN" -p uncensored "$@" </dev/null >/dev/null 2>&1; }
 if service_installed && service_running; then : > "$RESTART"; fi
-[ -z "$OLD_BIN" ] || old_engine gateway stop
+# (--yes: it won't stop in the middle of something, a cron job say, without being told. Old engines don't know the word.)
+[ -z "$OLD_BIN" ] || old_engine gateway stop --yes || old_engine gateway stop || true
 
 rollback() {
   [ $? -eq 0 ] && return
@@ -157,7 +180,7 @@ rollback() {
   [ -d "$OLD" ] || return 0
   rm -rf "$ENG"; mv "$OLD" "$ENG"
   echo "!! engine build failed -- restored the previous engine" >&2
-  if [ -e "$RESTART" ]; then old_engine gateway start; rm -f "$RESTART"; fi
+  if [ -e "$RESTART" ]; then old_engine gateway start || true; rm -f "$RESTART"; fi
 }
 trap rollback EXIT
 [ ! -d "$ENG" ] || mv "$ENG" "$OLD"
@@ -172,6 +195,8 @@ HERMES_HOME="$GHOST_HOME" bash "$ENG/scripts/install.sh" "${flags[@]}"
 STORE_PY="$(ls -d "$GHOST_HOME"/tools/python-*/bin/python3 2>/dev/null | sort | tail -1)"
 [ -x "$STORE_PY" ] || { echo "!! the engine's Python was not installed under $GHOST_HOME/tools" >&2; exit 1; }
 pm() { (cd "$ENG" && HERMES_HOME="$GHOST_HOME" "$STORE_PY" -m pm.cli "$@" </dev/null); }
+# It remembers that you did without these, until they're asked for by name.
+if [ -z "${GHOST_NO_BROWSER:-}" ] && grep -qs chromium "$GHOST_HOME"/installs/*/declined-packages.json; then pm install chromium cua-driver; fi
 # Web search is on by default in ghost, so its backend ships rather than installing mid-conversation.
 pm install --extra ddgs >/dev/null
 

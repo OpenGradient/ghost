@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import re
+import socketserver
 import struct
 import sys
 import time
@@ -207,10 +208,16 @@ def handler(service):
     return Handler
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def server_bind(self):   # without looking up its own name, which takes half a minute on some Macs
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def serve(service, port=0):
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler(service))
-    server.daemon_threads = True
-    return server
+    return Server(("127.0.0.1", port), handler(service))
 
 
 class Redirected(httpx.HTTPTransport):

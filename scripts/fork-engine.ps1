@@ -11,6 +11,7 @@
 param(
   [string]$Eng       = $(if ($env:GHOST_ENGINE) { $env:GHOST_ENGINE } else { "$env:USERPROFILE\.ghost-engine" }),
   [string]$GhostHome = $(if ($env:GHOST_HOME)   { $env:GHOST_HOME }   else { "$env:USERPROFILE\.ghost" }),
+  [string]$Python    = "python",   # a Python 3.9+ to run debrand.py
   [switch]$Check,
   [switch]$RefreshGateway
 )
@@ -69,7 +70,21 @@ function Assert-Closed {
   $open = @(Get-EngineProcess | Where-Object { $_.CommandLine -notmatch 'gateway run' })
   if ($open.Count) { throw "ghost is open (pid $($open.ProcessId -join ', ')). Close those windows and re-run, or set GHOST_FORCE=1." }
 }
-function Get-GatewayTask { Get-ScheduledTask -TaskName "Hermes_Gateway_uncensored" -ErrorAction SilentlyContinue }
+$Startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Hermes_Gateway_uncensored.vbs"
+function Test-Gateway {   # installed, as a task, or where Task Scheduler wouldn't have it, in the Startup folder
+  [bool](Get-ScheduledTask -TaskName "Hermes_Gateway_uncensored" -ErrorAction SilentlyContinue) -or
+    ((Test-Path $Startup) -and [IO.File]::ReadAllText($Startup).Contains("\.ghost\"))
+}
+$env:HERMES_NONINTERACTIVE = "1"
+# Antivirus, or a program that inherited the folder, may hold it for a moment.
+function Move-Tree($from, $to) {
+  for ($i = 1; ; $i++) { try { [IO.Directory]::Move($from, $to); return } catch { if ($i -eq 10) { throw }; Start-Sleep -Milliseconds 500 } }
+}
+function Restore-Engine {
+  if (Test-Path $Eng) { Remove-Item -Recurse -Force $Eng -ErrorAction SilentlyContinue }
+  if (Test-Path $Eng) { Move-Tree $Eng "$Eng.broken-$PID" }
+  Move-Tree $Old $Eng
+}
 
 # What this build is made from. The engine there is current if it was made from the same, and still launches.
 $made = (@("..\engine.pin", "debrand.py", "fork-engine.ps1") | ForEach-Object { [IO.File]::ReadAllText((Join-Path $here $_)) }) -join ""
@@ -82,7 +97,7 @@ function Test-Current {
 if ($Check) { Assert-Closed; return }
 if ($RefreshGateway) {
   if (-not (Test-Path $Refresh)) { return }
-  if (-not (Get-GatewayTask)) { Remove-Item $Refresh; return }
+  if (-not (Test-Gateway)) { Remove-Item $Refresh; return }
   if (Launcher) {
     Write-Host "==> moving the background gateway onto the new engine"
     $start = if (Test-Path $Restart) { "--start-now" } else { "--no-start-now" }   # one you had stopped stays stopped
@@ -92,6 +107,8 @@ if ($RefreshGateway) {
   }
   return
 }
+# A build that was killed part-way left the engine it was replacing set aside: put that one back first.
+if (Test-Path $Old) { if (Test-Launches) { Remove-Item -Recurse -Force $Old } else { Restore-Engine } }
 if (Test-Current) { Write-Host "==> the engine is already this build: $Eng"; exit 0 }
 Assert-Closed
 
@@ -101,7 +118,9 @@ if (Test-Path $New) { Remove-Item -Recurse -Force $New }
 New-Item -ItemType Directory -Force -Path $GhostHome | Out-Null
 for ($i = 1; $i -le 3; $i++) {
   # core.longpaths: the tree has paths past MAX_PATH; autocrlf would change every byte the engine's lock hashes.
-  & git -c advice.detachedHead=false -c core.longpaths=true -c core.autocrlf=false clone --quiet --depth 1 --branch "v$Version" $RepoUrl $New
+  # (A network that inspects TLS has a certificate only Windows knows, and git may be using a list of its own.)
+  $tls = if ($i -gt 1) { @("-c", "http.sslBackend=schannel", "-c", "http.schannelCheckRevoke=false") } else { @() }
+  & git -c advice.detachedHead=false -c core.longpaths=true -c core.autocrlf=false @tls clone --quiet --depth 1 --branch "v$Version" $RepoUrl $New
   if ($LASTEXITCODE -eq 0) { break }
   if (Test-Path $New) { Remove-Item -Recurse -Force $New }
   if ($i -eq 3) { throw "could not fetch $RepoUrl" }
@@ -118,7 +137,7 @@ foreach ($d in ".git",".github","tests","tests-js","evals","website","contributo
 
 # ---------- 2. debrand + seal ----------
 Write-Host "==> debranding"
-& uv run --no-project --python 3.11 python "$here\debrand.py" $New
+& $Python -Es "$here\debrand.py" $New
 if ($LASTEXITCODE -ne 0) { throw "debrand.py failed" }
 $stamp = [ordered]@{
   schemaVersion = 2; commit = $Commit; commitDate = $null; branch = $null
@@ -129,27 +148,22 @@ $stamp = [ordered]@{
 [IO.File]::WriteAllText("$New\install-stamp.json", ($stamp | ConvertTo-Json) + "`n")
 
 # ---------- 3. stop the background gateway, then swap the trees ----------
-# A build that was killed part-way left the engine it was replacing set aside: put that one back first.
-if ((Test-Path $Old) -and -not (Test-Launches)) {
-  if (Test-Path $Eng) { Remove-Item -Recurse -Force $Eng }
-  Move-Item $Old $Eng
-}
-if (Test-Path $Old) { Remove-Item -Recurse -Force $Old }
-
+Assert-Closed   # (that took a while)
 $oldBin = Launcher
 if (-not $oldBin -and (Test-Path "$Eng\venv\Scripts\hermes.exe")) { $oldBin = "$Eng\venv\Scripts\hermes.exe" }
 if ($oldBin) {
-  $task = Get-GatewayTask
-  if ($task -and ($task.State -eq 'Running' -or (Get-EngineProcess | Where-Object { $_.CommandLine -match 'gateway run' }))) {
-    New-Item -ItemType File -Force -Path $Restart | Out-Null
-  }
+  $running = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'gateway run' -and $_.CommandLine -notmatch 'idle-exit' -and
+    ($_.CommandLine.Contains("$Eng\") -or $_.CommandLine.Contains("$GhostHome\") -or $_.CommandLine.Contains($Eng.Replace('\', '\\'))) }
+  if ((Test-Gateway) -and $running) { New-Item -ItemType File -Force -Path $Restart | Out-Null }
   $env:HERMES_HOME = $GhostHome
-  Invoke-Quietly { & $oldBin -p uncensored gateway stop } | Out-Null
+  # (--yes: it won't stop in the middle of something, a cron job say, without being told. Old engines don't know the word.)
+  Invoke-Quietly { & $oldBin -p uncensored gateway stop --yes; if ($LASTEXITCODE) { & $oldBin -p uncensored gateway stop } } | Out-Null
 }
 
+$built = $false
 try {
-  if (Test-Path $Eng) { Move-Item $Eng $Old }
-  Move-Item $New $Eng
+  if (Test-Path $Eng) { Move-Tree $Eng $Old }
+  Move-Tree $New $Eng
 
   # ---------- 4. runtime + launcher ----------
   Write-Host "==> installing the engine runtime (Python, Node, ripgrep, locked dependencies)"
@@ -168,6 +182,9 @@ try {
     # Web search is on by default in ghost, so its backend ships rather than installing mid-conversation.
     & $storePy -m pm.cli install --extra ddgs | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "could not install the web-search backend" }
+    # It remembers that you did without these, until they're asked for by name.
+    $declined = Get-ChildItem "$GhostHome\installs\*\declined-packages.json" -ErrorAction SilentlyContinue | Where-Object { [IO.File]::ReadAllText($_.FullName).Contains("chromium") }
+    if (-not $env:GHOST_NO_BROWSER -and $declined) { & $storePy -m pm.cli install chromium cua-driver | Out-Null; if ($LASTEXITCODE -ne 0) { throw "could not install the browser" } }
   } finally { Pop-Location }
 
   $mint = Join-Path ([IO.Path]::GetTempPath()) "ghost-mint-$PID.py"
@@ -188,23 +205,27 @@ sys.exit(0 if ensure_install_launchers(root, root / ".hermes" / "bin") else "cou
   $first = @(Invoke-Engine @("--version"))[0]   # collected whole: Select-Object -First would cut the process off
   Write-Host "    $first"
   if (-not "$first".StartsWith("Ghost v$Version")) { throw "expected 'Ghost v$Version'" }
-} catch {
-  if (Test-Path $New) { Remove-Item -Recurse -Force $New }
-  if (Test-Path $Old) {
-    if (Test-Path $Eng) { Remove-Item -Recurse -Force $Eng }
-    Move-Item $Old $Eng
-    Write-Host "!! engine build failed -- restored the previous engine"
-    if (Test-Path $Restart) {
-      $env:HERMES_HOME = $GhostHome
-      Invoke-Quietly { & $oldBin -p uncensored gateway start } | Out-Null
-      Remove-Item $Restart -ErrorAction SilentlyContinue
+  $built = $true
+} finally {   # (which Ctrl-C reaches too)
+  if (-not $built) {
+    if (Test-Path $New) { Remove-Item -Recurse -Force $New -ErrorAction SilentlyContinue }
+    if (Test-Path $Old) {
+      Restore-Engine
+      Write-Host "!! engine build failed -- restored the previous engine"
+      if (Test-Path $Restart) {
+        $env:HERMES_HOME = $GhostHome
+        Invoke-Quietly { & $oldBin -p uncensored gateway start } | Out-Null
+        Remove-Item $Restart -ErrorAction SilentlyContinue
+      }
     }
   }
-  throw
 }
 
 New-Item -ItemType File -Force -Path $Refresh | Out-Null
 [IO.File]::WriteAllText("$Eng\.ghost-recipe", $Recipe)
 if (Test-Path $Old) { Remove-Item -Recurse -Force $Old -ErrorAction SilentlyContinue }
+Push-Location $Eng; $env:HERMES_HOME = $GhostHome
+Invoke-Quietly { & $storePy -m pm.cli gc } | Out-Null   # drop dependency generations nothing uses any more
+Pop-Location
 Write-Host "==> engine ready: $Eng"
 exit 0
