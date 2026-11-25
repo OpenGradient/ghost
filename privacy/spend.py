@@ -146,6 +146,10 @@ def main(argv):
         print(f"{name:14} ${sum(r['usd'] for r in part):8.2f}   {len(part)} replies")
     limit = budget()
     print("Budget         no limit" if limit is None else f"Budget         ${limit:8.2f}   per hour (ghost budget N)")
+    import ghost_auth
+    left = ghost_auth.balance()
+    if left is not None:
+        print(f"Credits left   ${left:8.2f}")
     return 0
 
 

@@ -29,7 +29,7 @@ import ghost_auth
 from ghost_auth import AuthError
 
 APP_URL = os.environ.get("GHOST_CHAT_APP_URL", "https://www.dreamfort.ai").rstrip("/")
-KEYS_URL = "https://api.dreamfort.ai/api-keys"
+KEYS_URL = f"{ghost_auth.CONSOLE_URL}/api-keys"
 TIMEOUT = httpx.Timeout(15.0)
 LOGIN_WINDOW = 600.0
 MIN_POLL = 1.0
@@ -447,7 +447,7 @@ def api_key_login(key=None):
             say()
     ghost_auth.save_api_key(value)
     if note:
-        say(f"! {note} Add some at https://api.dreamfort.ai")
+        say(f"! {note} Add some at {ghost_auth.CONSOLE_URL}")
 
 
 # ── commands ──────────────────────────────────────────────────────────────────

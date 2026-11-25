@@ -79,6 +79,10 @@ SUBS = [
      "        \"session with /new or switch models with /model; if it keeps happening, run `hermes doctor`.",
      "The model didn't answer, for the reason below. If it isn't clear, start a clean session \"\n"
      "        \"with /new or switch models with /model."),
+    ("{provider_label} reported that billing, credits, or account entitlement is exhausted for {model_label}.",
+     "The model didn't answer: your DreamFort credits have run out."),
+    ("Add credits or update billing with that provider, then retry.", "Add some, then send your message again."),
+    ("You can switch providers temporarily with /model <model> --provider <provider>.", "`ghost usage` shows what you have spent."),
     ("{situation} To avoid this in future, \"", "{situation} \""),
     ("add a backup provider with `hermes fallback add`.\\n\\nProvider said",
      "If it keeps happening, check `ghost-login --status`.\\n\\nProvider said"),

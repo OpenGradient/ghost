@@ -230,8 +230,8 @@ def _open(obj):
         if resp.status_code == 401:
             message = "DreamFort didn't accept this login; run `ghost-login` to connect again"
         elif resp.status_code == 402:
-            message = (f"your {'DreamFort API balance' if ghost_auth.api_key() else 'DreamFort account'} is out of credits; "
-                       "add some on the website and try again")
+            what, where = (("API balance", ghost_auth.CONSOLE_URL) if ghost_auth.api_key() else ("account", ghost_auth.CREDITS_URL))
+            message = f"your DreamFort {what} is out of credits; add some at {where}"
         raise Refused(resp.status_code, message)
 
 

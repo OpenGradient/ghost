@@ -48,7 +48,8 @@ The first run asks how you want to log in. Nothing is contacted before that.
 | `ghost` | Start chatting. `ghost -c` continues your last chat. |
 | `ghost -z "question"` | Ask once and print the answer. |
 | `ghost --local` | Use the offline model: nothing leaves this machine. |
-| `ghost usage` / `ghost budget` | What hosted models have cost you, and the hourly limit on it. |
+| `ghost doctor` | Check that everything works, and what to do if it doesn't. |
+| `ghost usage` / `ghost budget` | What hosted models have cost you, what credits are left, and the hourly limit. |
 | `ghost login` / `ghost logout` | Change how you're connected. |
 | `ghost update` | Get the latest release, with the options you installed with. |
 | `ghost uninstall` | Remove ghost. Your chats and settings stay unless you add `--purge`. |

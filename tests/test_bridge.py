@@ -193,8 +193,8 @@ def test_not_logged_in_fails_at_once(monkeypatch, enclave, bridge):
 
 
 @pytest.mark.parametrize("login, relay, token, words", [
-    ({"mode": "account"}, "https://chat/api/v1/chat/ohttp", "jwt", "DreamFort account is out of credits"),
-    ({"mode": "api_key"}, "https://chat/api/v1/developer/ohttp", "df_sk_1", "DreamFort API balance is out of credits"),
+    ({"mode": "account"}, "https://chat/api/v1/chat/ohttp", "jwt", "DreamFort account is out of credits; add some at https://www.dreamfort.ai/dashboard/credits"),
+    ({"mode": "api_key"}, "https://chat/api/v1/developer/ohttp", "df_sk_1", "DreamFort API balance is out of credits; add some at https://api.dreamfort.ai"),
 ])
 def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, words):
     """The real _upstream, with the transport watched: which relay a request goes to, and as whom."""
