@@ -104,6 +104,7 @@ Two boundaries, the same path the [chat.opengradient.ai](https://chat.opengradie
 
 ## Honest limits
 
+- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`.
 - **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
 - **The engine is forked, not rewritten.** It's one pinned Hermes release ([`engine.pin`](engine.pin)), patched and self-contained: no separate Hermes install is needed or touched, and `ghost update` is what moves it. Internal package names stay `hermes_cli`.
 - **A session runs in a background gateway.** ghost starts one local process for it, and it exits by itself after 10 idle minutes (unless you install it as a service with `ghost gateway install`).

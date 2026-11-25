@@ -219,14 +219,6 @@ def test_model_steer_deepseek_only():
     assert sum(1 for x in m["messages"] if x["role"] == "system") == 1 and m["messages"][0]["content"].endswith("BASE")
 
 
-def test_transient_detection():
-    assert sp._is_transient(502, "Selected TEE is not active in the registry")
-    assert sp._is_transient(500, "Stream setup failed")
-    assert sp._is_transient(503, "")
-    assert not sp._is_transient(400, "bad request")
-    assert not sp._is_transient(200, "ok")
-
-
 def test_stream_utf8_split_across_chunks():
     # an emoji's bytes split across two feeds must NOT be dropped/corrupted
     sd = presidio_scrub.StreamDeanonymizer({})

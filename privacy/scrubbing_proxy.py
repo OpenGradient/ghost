@@ -1,47 +1,41 @@
 #!/usr/bin/env python3
-"""PII-scrubbing OpenAI bridge that forwards to og-veil's local server.
+"""PII-scrubbing OpenAI bridge to DreamFort's enclaves.
 
 This is ghost's hosted-inference path. The forked Hermes engine talks plain
 OpenAI HTTP to us over localhost; we scrub PII/secrets out of the outbound
-content and strip the provider prefix from the model id, then forward the (still
-plain-OpenAI) request to **og-veil**'s local server, which owns the entire
-privacy protocol -- on-chain TEE registry discovery, Oblivious-HTTP/HPKE
-encryption, the chat-api relay, and per-response verification:
+content (opt-in), settle the request's limits, then seal it to an attested
+enclave with opengradient-ohttp, which owns the whole protocol -- TEE registry,
+Oblivious-HTTP/HPKE encryption, the chat-api relay, and checking the enclave's
+signature on every reply:
 
     Hermes (uncensored profile)
-      --plaintext localhost-->  THIS (127.0.0.1:8788)        [scrub PII/secrets]
-      --plaintext localhost-->  og-veil (127.0.0.1:11435)    [OHTTP + TEE + verify]
-      ---------------------->  chat-api relay  -->  TEE gateway
+      --plaintext localhost-->  THIS (127.0.0.1:8788)     [scrub, limit, seal, verify]
+      ------ ciphertext ----->  chat-api relay  -->  TEE gateway
 
-Because Hermes talks to us over plaintext localhost, we read & rewrite the body
-*before* it is handed to og-veil for encryption, so your name/email/secrets never
-reach the relay or the enclave. og-veil verifies every response against the
-enclave's registry signing key before a token is returned (verify-before-emit),
-and tags it with an `X-OpenGradient-Verified` header we pass straight through.
-
-Previously ghost hand-rolled the whole OHTTP/HPKE/registry/verification stack
-here (privacy/ohttp_client.py) plus the Supabase auth (privacy/chat_auth.py /
-chat_login.py). That is now delegated entirely to og-veil (the `opengradient-veil`
-package), so this process only scrubs and forwards -- one implementation of the
-protocol, shared with the chat-app and the og-veil CLI. Run `ghost-login`
-(-> `og-veil login`) once to connect your account; og-veil holds the session and
-masks your IP on its own egress.
+The relay sees your account and IP but only ciphertext; the enclave sees the
+prompt but not you. A reply is verified before a token of it reaches the engine.
+The login is og-veil's (`ghost-login`): it holds the session and refreshes it.
 """
 import json
 import os
 import random
 import re
+import threading
 import time
+import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
+from opengradient_ohttp import OHTTPTransport, TeeVerificationError
+from veil.config import session_path
+from veil.session import AuthError, Session
+
+import spend
+
+# The enclave signs a fixed set of request fields; the client warns about each other one it leaves out.
+warnings.filterwarnings("ignore", message="opengradient-ohttp: ")
 
 LISTEN = ("127.0.0.1", 8788)
-# og-veil's local OpenAI-compatible server. It owns OHTTP/HPKE, the TEE registry,
-# response verification, and the Supabase session -- everything ghost used to
-# hand-roll. Override the port/host with GHOST_VEIL_URL (default :11435, chosen to
-# avoid colliding with Ollama on :11434).
-VEIL_URL = os.environ.get("GHOST_VEIL_URL", "http://127.0.0.1:11435/v1").rstrip("/")
 LOG = os.path.expanduser("~/.ghost/privacy/scrubber.log")
 DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
 
@@ -323,31 +317,223 @@ def _apply_model_steer(obj):
     return obj
 
 
-# ── Upstream: og-veil's local OpenAI-compatible server ────────────────────────
-# The scrubber -> og-veil hop is plaintext localhost. trust_env=False ignores any
-# ambient HTTPS_PROXY so this hop always stays on loopback. og-veil owns the egress
-# to chat-api (OHTTP-encrypted).
-def _veil_client():
-    return httpx.Client(timeout=300.0, trust_env=False)
+# ── Limits ────────────────────────────────────────────────────────────────────
+# The gateway caps a reply at 4096 tokens unless the request says otherwise, and that includes the
+# model's hidden reasoning: left alone, a long answer comes back cut off or empty, marked "stop", and
+# billed. So every request says how much room it has, and how hard to think.
+MAX_TOKENS = 32000
+_EFFORTS = {"none", "low", "medium", "high"}
+_EFFORT_ALIASES = {"minimal": "low", "xhigh": "high", "max": "high"}
+DEFAULT_EFFORT = "low"
+# Asked to reason, Hermes writes its thinking into the answer (~15x the tokens).
+_NO_REASONING = frozenset({"hermes-4-405b"})
 
 
-# og-veil / the gateway is intermittently flaky: a stale TEE selection 502s "Selected TEE is
-# not active in the registry" and the gateway occasionally 500s "Stream setup failed". Both
-# self-recover within seconds, so retry a couple of times with jittered backoff before giving
-# up. Chat completions are effectively idempotent here, so a retry is safe.
+def _apply_limits(obj):
+    asked = obj.get("max_tokens") or obj.get("max_completion_tokens")
+    obj.pop("max_completion_tokens", None)
+    obj["max_tokens"] = min(int(asked), MAX_TOKENS) if asked else MAX_TOKENS
+    effort = str(obj.get("reasoning_effort") or DEFAULT_EFFORT).lower()
+    effort = _EFFORT_ALIASES.get(effort, effort)
+    obj["reasoning_effort"] = effort if effort in _EFFORTS else DEFAULT_EFFORT
+    if obj.get("model") in _NO_REASONING:
+        obj["reasoning_effort"] = "none"
+    return obj
+
+
+# ── Upstream: the enclave, through DreamFort's relay ──────────────────────────
+# The relay bills every request the enclave accepts, in full, even if we hang up on it. So a request is
+# retried only while it has not been accepted, and a reply that comes back unusable is reported as that
+# instead of being quietly paid for again.
+UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transport; never contacted
+RELAY_PATH = "/api/v1/chat/ohttp"
+# Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice.
+TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
 _RETRY_STATUS = frozenset({500, 502, 503, 504})
 _MAX_TRIES = 3
+_BREAK_WINDOW = 300.0
+
+_lock = threading.Lock()
+_session = None
+_clients = {}
+_last_break = 0.0
 
 
-def _is_transient(status, body_text=""):
-    if status in _RETRY_STATUS:
-        return True
-    t = (body_text or "").lower()
-    return "tee is not active" in t or "stream setup failed" in t or "temporarily" in t
+class Unusable(Exception):
+    """A reply that was generated, and billed, but can't be used."""
+
+
+class Refused(Exception):
+    """The relay or the enclave said no before generating anything."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def _upstream():
+    """(client, headers) for the DreamFort login. Raises AuthError when nobody is logged in."""
+    global _session
+    with _lock:
+        if _session is None or not session_path().exists():
+            _session = Session.load()
+        session = _session
+    token = session.access_token()   # refreshes when due, and notices a new login
+    cfg = session.config
+    key = (cfg.chat_api_base_url.rstrip("/") + RELAY_PATH, cfg.tee_registry_rpc_url, cfg.tee_registry_address)
+    with _lock:
+        if key not in _clients:
+            registry = {}
+            if cfg.tee_registry_rpc_url and cfg.tee_registry_address:
+                registry = {"registry_rpc_url": cfg.tee_registry_rpc_url, "registry_address": cfg.tee_registry_address}
+            transport = OHTTPTransport(relay_url=key[0], verify_before_release=True, timeout=TIMEOUT, **registry)
+            _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
+        return _clients[key], {"Authorization": f"Bearer {token}"}
 
 
 def _backoff(attempt):
     time.sleep(min(4.0, 0.5 * (2 ** attempt)) + random.uniform(0, 0.3))
+
+
+def _open(obj):
+    """Start one generation and return its open stream. Retries only what the enclave never accepted."""
+    for attempt in range(_MAX_TRIES):
+        last = attempt == _MAX_TRIES - 1
+        client, headers = _upstream()
+        try:
+            resp = client.send(client.build_request("POST", UPSTREAM, json=obj, headers=headers), stream=True)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+            if last:
+                raise Refused(502, f"couldn't reach DreamFort ({type(e).__name__}); check your connection and try again") from e
+            log(f"relay unreachable (try {attempt + 1}): {e}; retrying")
+            _backoff(attempt)
+            continue
+        if resp.status_code < 400:
+            return resp
+        try:
+            message = _decode_error(resp.read())
+        finally:
+            resp.close()
+        if resp.status_code in _RETRY_STATUS and not last:
+            log(f"relay {resp.status_code} before accepting (try {attempt + 1}): {message}; retrying")
+            _backoff(attempt)
+            continue
+        if resp.status_code == 401:
+            message = "DreamFort didn't accept this login; run `ghost-login` to connect again"
+        elif resp.status_code == 402:
+            message = "your DreamFort account is out of credits"
+        raise Refused(resp.status_code, message)
+
+
+class Reply:
+    """What one generation produced, read off its event stream."""
+
+    def __init__(self, cap):
+        self.cap, self.events, self.text, self.calls = cap, [], [], {}
+        self.finish, self.usage, self.cost, self.meta = None, {}, None, {}
+
+    def feed(self, event):
+        self.events.append(event)
+        self.usage = event.get("usage") or self.usage
+        cost = (event.get("opengradient") or {}).get("cost_usd")
+        if cost:
+            self.cost = float(cost)
+        for key in ("id", "model", "created", "tee_id", "tee_signature", "tee_request_hash", "tee_output_hash",
+                    "tee_timestamp", "opengradient"):
+            if event.get(key) is not None:
+                self.meta[key] = event[key]
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                self.text.append(delta["content"])
+            for part in delta.get("tool_calls") or []:
+                call = self.calls.setdefault(part.get("index", 0), {"id": None, "name": "", "arguments": ""})
+                call["id"] = part.get("id") or call["id"]
+                fn = part.get("function") or {}
+                call["name"] = fn.get("name") or call["name"]
+                call["arguments"] += fn.get("arguments") or ""
+            self.finish = choice.get("finish_reason") or self.finish
+
+    @property
+    def tokens_out(self):
+        return int(self.usage.get("completion_tokens") or 0)
+
+    @property
+    def hit_cap(self):
+        return self.tokens_out >= self.cap
+
+    def check(self):
+        """Raise Unusable for what must not reach the engine; mark a cut-off answer as cut off."""
+        if not self.text and not self.calls:
+            why = "spent its whole reply on hidden reasoning and returned nothing" if self.hit_cap else "returned an empty reply"
+            raise Unusable(f"the model {why} ({self.tokens_out:,} tokens). It was not retried, so you pay for it once. "
+                           "Try `/reasoning low`, a smaller request, or another model with /model.")
+        if self.calls and self.hit_cap:
+            raise Unusable(f"the reply hit its {self.cap:,}-token limit in the middle of an action, so nothing was run. "
+                           "Ask for the work in smaller pieces (one scene or file at a time).")
+        if self.hit_cap:   # the gateway says "stop" either way; "length" lets the engine ask for the rest
+            self.finish = "length"
+            for event in self.events:
+                for choice in event.get("choices") or []:
+                    if choice.get("finish_reason"):
+                        choice["finish_reason"] = "length"
+
+    def completion(self):
+        message = {"role": "assistant", "content": "".join(self.text) or None}
+        if self.calls:
+            message["tool_calls"] = [
+                {"id": c["id"] or f"call_{i}", "type": "function",
+                 "function": {"name": c["name"], "arguments": c["arguments"]}}
+                for i, c in sorted(self.calls.items())]
+        body = {"id": "chatcmpl-ghost", "created": int(time.time()), **self.meta, "object": "chat.completion",
+                "choices": [{"index": 0, "message": message, "finish_reason": self.finish or "stop"}], "usage": self.usage}
+        body["opengradient_verification"] = {"verified": True, "tee_id": self.meta.get("tee_id")}
+        return body
+
+
+def _generate(obj):
+    """One generation, verified and whole. Always streamed from the enclave: its buffered form cuts long
+    replies off at the relay's timeout and quietly 'repairs' a truncated tool call into valid JSON."""
+    global _last_break
+    why = spend.paused()
+    if why:
+        raise Refused(422, why)
+    reply = Reply(obj["max_tokens"])
+    resp = _open({**obj, "stream": True})
+    ended = False
+    try:
+        for line in resp.iter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                ended = True
+                break
+            event = json.loads(data)
+            if event.get("error"):
+                raise httpx.RemoteProtocolError(str(event["error"])[:200])
+            reply.feed(event)
+            ended = ended or reply.finish is not None
+        if not ended:
+            raise httpx.RemoteProtocolError("the reply stopped early")
+    except (httpx.HTTPError, TeeVerificationError, ValueError) as e:
+        # Accepted, so billed, but we never got it. One engine retry is fair; a second break in a row is not.
+        tokens_in = len(json.dumps(obj)) // 4
+        spend.record(obj.get("model"), tokens_in, 2000, spend.estimate(obj.get("model"), tokens_in, 2000))
+        again, _last_break = time.time() - _last_break < _BREAK_WINDOW, time.time()
+        log(f"reply lost after it was accepted: {type(e).__name__}: {e}")
+        message = f"the connection to the enclave broke before the reply arrived ({type(e).__name__})"
+        if again:
+            raise Unusable(message + " twice in a row; each attempt is billed, so ghost stopped retrying. Try again in a moment.") from e
+        raise Refused(502, message) from e
+    finally:
+        resp.close()
+    tokens_in = int(reply.usage.get("prompt_tokens") or 0)
+    cost = reply.cost if reply.cost is not None else spend.estimate(obj.get("model"), tokens_in, reply.tokens_out)
+    spend.record(obj.get("model"), tokens_in, reply.tokens_out, cost)
+    reply.check()
+    _last_break = 0.0
+    return reply
 
 
 def _decode_error(raw: bytes) -> str:
@@ -357,10 +543,10 @@ def _decode_error(raw: bytes) -> str:
             err = data.get("error")
             if isinstance(err, dict):
                 return str(err.get("message") or err)
-            return str(err or data.get("detail") or "og-veil error")
+            return str(err or data.get("detail") or "the relay returned an error")
     except Exception:
         pass
-    return raw.decode("utf-8", errors="ignore")[:300] or "og-veil error"
+    return raw.decode("utf-8", errors="ignore")[:300] or "the relay returned an error"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -404,7 +590,7 @@ class Handler(BaseHTTPRequestHandler):
         # Provider-detection probes -- answer LOCALLY so the engine doesn't try to reach a
         # remote provider just to detect the endpoint type (it fires these per turn). Serving
         # them instantly keeps per-turn latency down, and the model list stays consistent with
-        # the hosted catalog. Real chat goes through do_POST -> og-veil -> chat-api TEE gateway.
+        # the hosted catalog. Real chat goes through do_POST -> the enclave.
         probe = self.path.rstrip("/")
         if probe in ("/v1/models", "/api/v1/models", "/models"):
             ml = json.dumps(
@@ -444,10 +630,9 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, f"invalid JSON body: {e}")
             return
 
-        # Scrub before anything leaves localhost, then strip the provider prefix
-        # to the gateway model name. og-veil does the rest (OHTTP/TEE/verify).
-        # With Presidio, redaction is reversible: keep the {placeholder: original}
-        # map on the handler to de-anonymize og-veil's response/stream locally.
+        # Scrub before anything leaves localhost, then strip the provider prefix to the gateway
+        # model name. With Presidio, redaction is reversible: keep the {placeholder: original}
+        # map on the handler to de-anonymize the reply locally.
         obj, redactions, self._pii_map = _anonymize_request(obj)
         wants_stream = bool(obj.get("stream", False))
         obj["model"] = _gateway_model(obj.get("model"))
@@ -461,125 +646,60 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        # Apply the per-model uncensor steer (e.g. DeepSeek) before forwarding.
-        obj = _apply_model_steer(obj)
+        # Apply the per-model uncensor steer (e.g. DeepSeek) and the limits before forwarding.
+        obj = _apply_limits(_apply_model_steer(obj))
 
-        log(f"chat/completions model={obj.get('model')} stream={wants_stream} redactions={redactions} -> {VEIL_URL}")
-        self._headers_sent = False
+        log(f"chat/completions model={obj.get('model')} stream={wants_stream} effort={obj['reasoning_effort']} "
+            f"max_tokens={obj['max_tokens']} redactions={redactions}")
         try:
-            if wants_stream:
-                self._relay_stream(obj)
-            else:
-                self._relay_single(obj)
-        except httpx.HTTPError as e:
-            # og-veil unreachable (not running / not logged in). Surface it so the
-            # launcher's fallback to the local model kicks in -- but only if we haven't
-            # already started a 200 response body (else we'd corrupt the stream).
-            log(f"og-veil unreachable: {e}")
-            if not self._headers_sent:
-                self._error(502, f"could not reach og-veil at {VEIL_URL} ({type(e).__name__}) — is it running? try `ghost-login`")
-        except Exception as e:
-            log(f"upstream-error {e}")
-            if not self._headers_sent:
-                self._error(502, str(e))
-
-    # ── transport: scrub -> forward to og-veil ──
-    def _relay_single(self, obj):
-        last_status, last_body = 502, b""
-        for attempt in range(_MAX_TRIES):
-            try:
-                with _veil_client() as client:
-                    resp = client.post(VEIL_URL + "/chat/completions", json=obj)
-            except httpx.HTTPError as e:
-                if attempt < _MAX_TRIES - 1:
-                    log(f"og-veil transport error (try {attempt + 1}): {e}; retrying")
-                    _backoff(attempt)
-                    continue
-                raise
-            if resp.status_code < 400:
-                # og-veil already verified the response and attached the
-                # opengradient_verification block. De-anonymize placeholders locally
-                # (content + local tool-call args) before handing it to the engine.
-                try:
-                    body = resp.json()
-                except Exception:
-                    self._error(502, _decode_error(resp.content))
-                    return
-                body = _deanonymize_body(body, getattr(self, "_pii_map", None))
-                self._send_json(200, body)
-                return
-            last_status, last_body = resp.status_code, resp.content
-            if _is_transient(resp.status_code, _decode_error(resp.content)) and attempt < _MAX_TRIES - 1:
-                log(f"og-veil {resp.status_code} transient (try {attempt + 1}); retrying")
-                _backoff(attempt)
-                continue
-            self._error(resp.status_code, _decode_error(resp.content))
+            reply = _generate(obj)
+        except AuthError as e:
+            log(f"not logged in: {e}")
+            self._error(401, "not logged in to DreamFort; run `ghost-login`")
             return
-        self._error(last_status, _decode_error(last_body))
+        except Refused as e:
+            log(f"refused ({e.status}): {e}")
+            self._error(e.status, str(e))
+            return
+        except Unusable as e:
+            # 422: the engine doesn't retry it, so it's paid for once (it may try the fallback model).
+            log(f"unusable reply: {e}")
+            self._error(422, str(e))
+            return
+        except Exception as e:
+            log(f"upstream-error {type(e).__name__}: {e}")
+            self._error(502, str(e))
+            return
+        log(f"reply model={obj.get('model')} tokens={reply.usage.get('prompt_tokens')}+{reply.tokens_out} finish={reply.finish}")
+        if wants_stream:
+            self._send_stream(reply)
+        else:
+            self._send_json(200, _deanonymize_body(reply.completion(), getattr(self, "_pii_map", None)))
 
-    def _relay_stream(self, obj):
-        obj = dict(obj)
-        obj["stream"] = True
-        for attempt in range(_MAX_TRIES):
-            try:
-                with _veil_client() as client:
-                    with client.stream("POST", VEIL_URL + "/chat/completions", json=obj) as resp:
-                        if resp.status_code >= 400:
-                            body = resp.read()
-                            if _is_transient(resp.status_code, _decode_error(body)) and attempt < _MAX_TRIES - 1:
-                                log(f"og-veil {resp.status_code} transient (stream try {attempt + 1}); retrying")
-                                _backoff(attempt)
-                                continue
-                            self._error(resp.status_code, _decode_error(body))
-                            return
-                        # Status is good -> commit to the 200 stream. From here we must NOT
-                        # retry or send another status line; a mid-stream failure can only be
-                        # surfaced as a terminal error frame on the already-open body.
-                        self.send_response(200)
-                        self.send_header("Content-Type", resp.headers.get("Content-Type", "text/event-stream"))
-                        self.send_header("Cache-Control", "no-cache")
-                        self.send_header("Connection", "close")
-                        verified = resp.headers.get("X-OpenGradient-Verified")
-                        if verified:
-                            self.send_header("X-OpenGradient-Verified", verified)
-                        self.end_headers()
-                        self._headers_sent = True
-                        # og-veil verified the whole stream before replaying it. If we anonymized
-                        # the request, de-anonymize on the way out (content + local tool-call args,
-                        # split-delta safe); otherwise forward bytes untouched.
-                        mp = getattr(self, "_pii_map", None)
-                        deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
-                        try:
-                            for chunk in resp.iter_raw():
-                                if not chunk:
-                                    continue
-                                out = deanon.feed(chunk) if deanon else chunk
-                                if out:
-                                    self.wfile.write(out)
-                                    self.wfile.flush()
-                            if deanon:
-                                tail = deanon.close()
-                                if tail:
-                                    self.wfile.write(tail)
-                                    self.wfile.flush()
-                        except Exception as e:
-                            # Mid-stream drop: the 200 body is already flowing, so emit a terminal
-                            # error event instead of corrupting it with a fresh status line.
-                            log(f"mid-stream drop: {e}")
-                            try:
-                                self.wfile.write(
-                                    b'data: {"error":{"message":"stream interrupted"}}\n\ndata: [DONE]\n\n'
-                                )
-                                self.wfile.flush()
-                            except Exception:
-                                pass
-                        return
-            except httpx.HTTPError as e:
-                if attempt < _MAX_TRIES - 1:
-                    log(f"og-veil transport error (stream try {attempt + 1}): {e}; retrying")
-                    _backoff(attempt)
-                    continue
-                raise
+    def _send_stream(self, reply):
+        """Replay the verified reply as SSE. If the request was anonymized, de-anonymize on the way out
+        (content + local tool-call args, split-delta safe)."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-OpenGradient-Verified", "true")
+        self.end_headers()
+        mp = getattr(self, "_pii_map", None)
+        deanon = presidio_scrub.StreamDeanonymizer(mp) if (mp and _PRESIDIO_OK) else None
+        frames = [b"data: " + json.dumps(e).encode() + b"\n\n" for e in reply.events] + [b"data: [DONE]\n\n"]
+        try:
+            for frame in frames:
+                out = deanon.feed(frame) if deanon else frame
+                if out:
+                    self.wfile.write(out)
+            if deanon:
+                tail = deanon.close()
+                if tail:
+                    self.wfile.write(tail)
+            self.wfile.flush()
+        except OSError as e:
+            log(f"the engine hung up: {e}")
 
 
 def _mark_presidio_failed(reason):
@@ -618,8 +738,9 @@ if __name__ == "__main__":
                 _mark_presidio_failed(f"warmup error: {e}")
     else:
         _clear_presidio_failed()  # NER not expected; not a failure
+    spend.prune()
     log(
-        f"scrubbing bridge up on {LISTEN[0]}:{LISTEN[1]} -> og-veil {VEIL_URL}; "
+        f"bridge up on {LISTEN[0]}:{LISTEN[1]}; "
         f"{len(DENY)} denylist terms; presidio={'on' if active else ('FAILED' if expected else 'off')}"
     )
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()
