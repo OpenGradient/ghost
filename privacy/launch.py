@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 PRIV = Path(__file__).resolve().parent
@@ -168,6 +169,16 @@ def engine_binary():
     return next((bin_dir / n for n in names if (bin_dir / n).exists()), None)
 
 
+def engine_proxies():
+    """What an engine needs to reach the world through this machine's proxy, and the bridge without it."""
+    found = urllib.request.getproxies()   # the environment's, or the system's settings
+    env = {f"{scheme}_proxy": found[scheme] for scheme in ("http", "https", "all") if found.get(scheme)}
+    if env:
+        direct = [h.strip() for h in (found.get("no") or "").split(",") if h.strip()]
+        env["no_proxy"] = ",".join(direct + [h for h in ("127.0.0.1", "localhost", "::1") if h not in direct])
+    return {name: value for lower, value in env.items() for name in (lower, lower.upper())}
+
+
 def run_engine(args):
     engine = engine_binary()
     if engine is None:
@@ -175,6 +186,7 @@ def run_engine(args):
         return 1
     # An ambient ANTHROPIC_API_KEY would make any `claude` the agent runs bill that key instead of your plan.
     os.environ.pop("ANTHROPIC_API_KEY", None)
+    os.environ.update(engine_proxies())
     command = [str(engine), "-p", "uncensored", *args]
     sys.stdout.flush()
     if os.name != "nt":

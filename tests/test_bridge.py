@@ -211,7 +211,7 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     seen = []
 
     class Transport(httpx.BaseTransport):
-        def __init__(self, relay_url, verify_before_release, timeout):   # and no registry: the library's own is used
+        def __init__(self, relay_url, verify_before_release, timeout, transport, registry_transport):   # and no registry of ours
             assert verify_before_release is True
             self.relay = relay_url
 

@@ -76,7 +76,13 @@ foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -Ta
 
 $env:UV_PROJECT_ENVIRONMENT = $Venv
 Push-Location $Repo
-try { & uv sync --quiet --python 3.11 --frozen; Check "uv sync" } finally { Pop-Location }
+try {
+  & uv sync --quiet --python 3.11 --frozen
+  if ($LASTEXITCODE -ne 0) {   # again with the system's certificates, for a network that has one of its own
+    $env:UV_SYSTEM_CERTS = "1"; $env:UV_NATIVE_TLS = "1"
+    & uv sync --quiet --python 3.11 --frozen; Check "uv sync"
+  }
+} finally { Pop-Location }
 Remove-Item Env:UV_PROJECT_ENVIRONMENT
 if (Test-Path "$Priv\.scrub") {   # someone relied on it: say so rather than let them find out
   Write-Host "   Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first."

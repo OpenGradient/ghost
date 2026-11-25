@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest httpx "opengradient-ohttp>=0.1,<0.2"
+      - run: pip install pytest httpx truststore "opengradient-ohttp>=0.1,<0.2"
       - run: pytest tests/ -q
 
   # The real thing: install ghost the way a user does, use it before logging in, and check the engine it built.
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest uv httpx "opengradient-ohttp>=0.1,<0.2"
+      - run: pip install pytest uv httpx truststore "opengradient-ohttp>=0.1,<0.2"
       - name: Install ghost
         if: runner.os != 'Windows'
         run: set -o pipefail; ./install.sh | tee "$HOME/install.txt"

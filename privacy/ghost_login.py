@@ -26,6 +26,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 import ghost_auth
+import outbound
 from ghost_auth import AuthError
 from localhttp import LocalServer
 
@@ -246,7 +247,7 @@ def parse_pasted(text):
 
 def device_code():
     """Ask DreamFort for a login code. None when this server doesn't do code logins."""
-    resp = httpx.post(f"{ghost_auth.CHAT_API_URL}/api/v1/cli-auth/device/code", timeout=TIMEOUT)
+    resp = httpx.post(f"{ghost_auth.CHAT_API_URL}/api/v1/cli-auth/device/code", timeout=TIMEOUT, verify=outbound.trust())
     if resp.status_code in (404, 405, 501):
         return None
     resp.raise_for_status()
@@ -268,7 +269,7 @@ def device_login(handshake):
     spin = Spinner(f"Waiting for you to approve it… {dim('(Esc to cancel)')}")
     if not COLOR:
         say("Waiting for you to approve it…")
-    deadline = time.monotonic() + float(handshake["expiresIn"])
+    deadline, trust = time.monotonic() + float(handshake["expiresIn"]), outbound.trust()
     interval = max(MIN_POLL, float(handshake["interval"]))
     next_poll = time.monotonic() + interval
     with Keys() as keys:
@@ -282,7 +283,7 @@ def device_login(handshake):
             next_poll = time.monotonic() + interval
             try:
                 poll = httpx.post(f"{ghost_auth.CHAT_API_URL}/api/v1/cli-auth/device/token",
-                                  json={"deviceCode": handshake["deviceCode"]}, timeout=TIMEOUT)
+                                  json={"deviceCode": handshake["deviceCode"]}, timeout=TIMEOUT, verify=trust)
             except httpx.HTTPError:
                 continue   # a network blip; keep waiting
             if poll.status_code == 200:
@@ -419,13 +420,14 @@ def check_key(key):
     headers = {"Authorization": f"Bearer {key}"}
     relay = ghost_auth.CHAT_API_URL + ghost_auth.API_KEY_RELAY
     try:
-        resp = httpx.get(f"{relay}/config", headers=headers, timeout=TIMEOUT)
+        trust = outbound.trust()
+        resp = httpx.get(f"{relay}/config", headers=headers, timeout=TIMEOUT, verify=trust)
         if resp.status_code in (401, 403):
             raise AuthError("DreamFort doesn't accept that key; check it was copied whole and hasn't been revoked")
         if resp.status_code >= 400:
             raise AuthError(f"DreamFort couldn't check that key right now ({resp.status_code}); try again in a moment")
         # An empty request is refused before anything runs, but only after the balance is checked.
-        probe = httpx.post(relay, headers={**headers, "Content-Type": "message/ohttp-req", "X-TEE-ID": "0x0"}, timeout=TIMEOUT)
+        probe = httpx.post(relay, headers={**headers, "Content-Type": "message/ohttp-req", "X-TEE-ID": "0x0"}, timeout=TIMEOUT, verify=trust)
     except httpx.HTTPError as e:
         raise AuthError(f"couldn't reach DreamFort ({type(e).__name__}); check your connection and try again") from e
     return "This key works, but its account has no credits yet." if probe.status_code == 402 else None

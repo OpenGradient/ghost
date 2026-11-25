@@ -104,9 +104,10 @@ def _refresh(session):
     if not session.get("refresh_token") or not config.get("supabase_url"):
         raise AuthError(EXPIRED)
     import httpx   # only here: the launcher reads this module on every start
+    import outbound
     try:
         resp = httpx.post(f"{config['supabase_url']}/auth/v1/token", params={"grant_type": "refresh_token"},
-                          json={"refresh_token": session["refresh_token"]},
+                          json={"refresh_token": session["refresh_token"]}, verify=outbound.trust(),
                           headers={"apikey": config.get("supabase_anon_key") or ""}, timeout=15)
     except httpx.HTTPError as e:
         raise AuthError(f"couldn't reach DreamFort to renew your login ({type(e).__name__}); check your connection") from e
@@ -169,8 +170,10 @@ def balance():
     if api_key() or not account():
         return None
     import httpx
+    import outbound
     try:
-        resp = httpx.get(f"{CHAT_API_URL}/api/v1/credits/balance", headers={"Authorization": f"Bearer {credentials()[1]}"}, timeout=10)
+        resp = httpx.get(f"{CHAT_API_URL}/api/v1/credits/balance", headers={"Authorization": f"Bearer {credentials()[1]}"},
+                         verify=outbound.trust(), timeout=10)
         return float(resp.json()["balanceUsd"]) if resp.status_code == 200 else None
     except (AuthError, httpx.HTTPError, ValueError, KeyError, TypeError):
         return None

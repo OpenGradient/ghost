@@ -23,6 +23,7 @@ import httpx
 from opengradient_ohttp import OHTTPTransport, TeeVerificationError
 
 import ghost_auth
+import outbound
 import spend
 from ghost_auth import AuthError
 from localhttp import LocalServer
@@ -168,6 +169,7 @@ def _apply_limits(obj):
 # retried only while it has not been accepted, and a reply that comes back unusable is reported as that
 # instead of being quietly paid for again.
 UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transport; never contacted
+REGISTRY = "https://ogevmdevnet.opengradient.ai"         # only to look up its proxy; the transport has its own
 # Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice.
 TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
 _RETRY_STATUS = frozenset({500, 502, 503, 504})
@@ -195,11 +197,13 @@ class Refused(Exception):
 def _upstream():
     """(client, headers) for the login in use. Raises AuthError when nobody is logged in."""
     relay, token = ghost_auth.credentials()
+    key = (relay, outbound.proxy(relay))   # a laptop changes networks
     with _lock:
-        if relay not in _clients:
-            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT)
-            _clients[relay] = httpx.Client(transport=transport, timeout=TIMEOUT)
-        return _clients[relay], {"Authorization": f"Bearer {token}"}
+        if key not in _clients:
+            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, transport=outbound.transport(relay),
+                                       registry_transport=outbound.transport(REGISTRY, public_only=True))
+            _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
+        return _clients[key], {"Authorization": f"Bearer {token}"}
 
 
 def _backoff(attempt):

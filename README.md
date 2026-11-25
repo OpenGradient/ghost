@@ -71,6 +71,8 @@ On Windows, from a clone: `.\install.ps1 -Local -NoBrowser`.
 
 An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
 
+**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io` and `ogevmdevnet.opengradient.ai`. If the network inspects TLS, the second one has to be exempt: that's where ghost reads which enclaves to trust, and it won't take that from an intercepted connection.
+
 </details>
 
 ## Why ghost exists
