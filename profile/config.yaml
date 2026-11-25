@@ -13,15 +13,12 @@ fallback_model:
   provider: ollama-local
   model: __LOCAL_MODEL__
 providers:
-  # Hosted models run through ghost's local PII scrubber (scrubbing_proxy.py on
-  # :8788), which scrubs name/secrets out of the content then forwards to og-veil
-  # (127.0.0.1:11435). og-veil OHTTP-encrypts each request to the OpenGradient
-  # chat-api TEE gateway and verifies the response -- the same private path the
-  # chat.opengradient.ai website uses. The api_key here is a placeholder: og-veil
-  # holds the real Supabase session (from `ghost-login`) and this value is ignored.
+  # Hosted models are reached through ghost's local bridge (scrubbing_proxy.py on :8788), which seals each
+  # request to an attested TEE enclave (OHTTP) and verifies the reply. The api_key here is a placeholder: the
+  # bridge uses your own login (`ghost login`).
   opengradient:
     base_url: http://127.0.0.1:8788/v1
-    api_key: managed-by-og-veil
+    api_key: managed-by-ghost
     default_model: abliteration/abliterated-model-large-v2
     context_length: 1048576
     models:   # smaller windows than the 1M above
@@ -104,7 +101,7 @@ agent:
       >w<
 # Every side task (titles, compression, approvals, ...) is pinned to ghost's own path. Left on "auto", a
 # task whose model call fails can fall through to any other provider you hold credentials for, outside
-# og-veil. A task the engine adds later must be added here: tests/test_engine.py fails if one is missing.
+# the enclave. A task the engine adds later must be added here: tests/test_engine.py fails if one is missing.
 auxiliary:
   vision:
     provider: ollama-local
@@ -165,7 +162,7 @@ auxiliary:
     model: ghost-tool:latest
 delegation:
   reasoning_effort: low
-prefill_messages_file: __HOME__/.ghost/privacy/uncensored_prefill.json
+prefill_messages_file: __GHOST_HOME__/privacy/uncensored_prefill.json
 # The gateway has no prompt cache, so the whole conversation is paid for again on every step: old tool
 # output is dropped early, and a chat is summarized well before the 1M window is full.
 compression:
@@ -278,10 +275,8 @@ moa:
 
 _config_version: 54
 
-# ── Fallback Model ────────────────────────────────────────────────────
-# ghost routes ALL inference through ONE path: the local scrubber -> og-veil -> the
-# OpenGradient TEE gateway. It deliberately does NOT use any external provider --
-# no Nous Portal, no OpenRouter, no direct Claude/GPT/Gemini -- because that would
-# bypass the privacy guarantee (OHTTP + TEE) and the unrestricted-only policy.
-# The fallback is set in `fallback_model` at the top of this file: a hosted
-# unrestricted model via og-veil by default, or a local model with GHOST_LOCAL=1.
+# ── Fallback model ────────────────────────────────────────────────────
+# Every hosted request takes one path: the local bridge, then the TEE gateway. There is deliberately no
+# other provider here (no Nous Portal, OpenRouter, Claude, GPT or Gemini): that would bypass the enclave and
+# the unrestricted-only line-up. The fallback at the top of this file is a hosted unrestricted model, or a
+# local one when ghost was installed with GHOST_LOCAL=1.

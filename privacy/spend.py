@@ -123,7 +123,7 @@ def prune():
         pass
 
 
-def _cli(argv):
+def main(argv):
     if argv[:1] == ["budget"]:
         if len(argv) > 1:
             value = argv[1].lower().lstrip("$")
@@ -150,4 +150,4 @@ def _cli(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(_cli(sys.argv[1:]))
+    sys.exit(main(sys.argv[1:]))

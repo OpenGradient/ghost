@@ -4,7 +4,7 @@ The job of this suite is to make a future PII/secret-leak regression fail loudly
 centerpiece is the GOLDEN LEAK CANARY: build a realistic outbound request body with a real
 secret/name in every channel the engine can replay (message content, assistant tool_calls
 arguments, tool/function definitions, prompt) and assert that none of those real values
-survive into the bytes that would be forwarded to og-veil / the relay / the enclave.
+survive into the bytes that would be sealed for the relay / the enclave.
 
 Run:  pytest tests/   (needs presidio-analyzer + spaCy en_core_web_md; skipped otherwise)
 """
@@ -106,7 +106,7 @@ def test_canary_secret_never_leaves_box_pii_on(presidio_on):
 def test_default_off_is_full_fidelity(presidio_on, tmp_path, monkeypatch):
     # DEFAULT = no .scrub marker: nothing is redacted, so the agent keeps full fidelity
     # (it can read/use secrets during real work, e.g. authorized pentesting). Privacy of the
-    # hosted path still comes from og-veil's OHTTP + TEE, not from this bridge.
+    # hosted path comes from sealing it to the enclave (OHTTP + TEE), not from redaction.
     monkeypatch.setattr(sp, "SCRUB_SENTINEL", str(tmp_path / ".absent"))  # absent -> scrub off
     obj, n, mapping = sp._anonymize_request(_request_with_secret_everywhere())
     wire = json.dumps(obj)

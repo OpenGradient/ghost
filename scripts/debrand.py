@@ -74,6 +74,11 @@ SUBS = [
     ("rejected your API key, so the model can't be reached. Update it in \"",
      "refused the request, so your session may have expired. Reconnect with \""),
     ("Settings → Providers, or run `hermes setup` in a terminal.", "`ghost-login` in a terminal."),
+    # What a request ghost's own bridge refused looks like (the budget, an unusable reply): its reason is the news.
+    ("{label} rejected this request as malformed, so the model didn't answer. Start a clean \"\n"
+     "        \"session with /new or switch models with /model; if it keeps happening, run `hermes doctor`.",
+     "The model didn't answer, for the reason below. If it isn't clear, start a clean session \"\n"
+     "        \"with /new or switch models with /model."),
     ("{situation} To avoid this in future, \"", "{situation} \""),
     ("add a backup provider with `hermes fallback add`.\\n\\nProvider said",
      "If it keeps happening, check `ghost-login --status`.\\n\\nProvider said"),
@@ -183,6 +188,12 @@ CODE_PATCHES = [
      r"return bool\(model_name and _NOUS_HERMES_NON_AGENTIC_RE\.search\(model_name\)\)",
      "return False  @NOTE",
      "Hermes tool-calling verified via the OpenGradient TEE gateway"),
+    # -- ghost shows the model what you see unless you turn redaction on, and its status line says which it is:
+    # a red warning at every start only teaches people to ignore warnings.
+    ("hermes_cli/cli_tui_runtime_mixin.py",
+     r'if _redact_raw\.lower\(\) not in \{"1", "true", "yes", "on"\}:',
+     "if False:  @NOTE",
+     "off by default, and the launcher says when it is on"),
     # -- startup tips: skip the ones that point at accounts and closed models ghost doesn't have.
     ("hermes_cli/tips.py",
      r"    keys = tip_keys\(\)\n",

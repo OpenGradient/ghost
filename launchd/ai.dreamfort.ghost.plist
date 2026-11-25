@@ -3,19 +3,25 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.advait.hermes-pii-scrubber</string>
+    <string>ai.dreamfort.ghost</string>
     <key>ProgramArguments</key>
     <array>
         <string>__PYTHON__</string>
-        <string>__HOME__/.ghost/privacy/scrubbing_proxy.py</string>
+        <string>-Es</string>
+        <string>__GHOST_HOME__/privacy/scrubbing_proxy.py</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GHOST_HOME</key>
+        <string>__GHOST_HOME__</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.ghost/privacy/scrubber.out.log</string>
+    <string>__GHOST_HOME__/privacy/bridge.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.ghost/privacy/scrubber.err.log</string>
+    <string>__GHOST_HOME__/privacy/bridge.log</string>
 </dict>
 </plist>

@@ -10,9 +10,9 @@ Built on the [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine
   <img src="assets/ghost-demo.gif" alt="ghost writing and running a port scanner, fully private" width="820">
 </p>
 
-## Install (30 seconds)
+## Install
 
-One deterministic command, no LLM and nothing agentic, installs **and** updates everything (the engine, the privacy stack, the `ghost` commands). uv provisions an isolated Python 3.11 under the hood, so the only prerequisite is `git`.
+One command, about two minutes. The only prerequisite is `git`; ghost brings its own Python, Node and engine, and touches nothing else on your machine.
 
 **macOS, Linux, WSL2:**
 
@@ -20,7 +20,7 @@ One deterministic command, no LLM and nothing agentic, installs **and** updates 
 curl -fsSL https://raw.githubusercontent.com/OpenGradient/ghost/main/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell, no administrator needed):**
 
 ```powershell
 irm https://raw.githubusercontent.com/OpenGradient/ghost/main/install.ps1 | iex
@@ -29,13 +29,49 @@ irm https://raw.githubusercontent.com/OpenGradient/ghost/main/install.ps1 | iex
 Then:
 
 ```bash
-ghost-login     # connect your account once (browser login)
-ghost           # start chatting (default: Abliterated Large v2, private via the TEE gateway)
+ghost
 ```
 
-Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`.
+The first run asks how you want to log in. Nothing is contacted before that.
 
-Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips those downloads. An update installs that release's `config.yaml` and `SOUL.md`; yours are kept beside them as `.prev`.
+| | |
+|---|---|
+| **DreamFort account** | Your plan and credits. ghost shows a code, you type it on [dreamfort.ai](https://www.dreamfort.ai), done. Works over SSH too. |
+| **DreamFort API key** | Billed by usage. Create one at [api.dreamfort.ai](https://api.dreamfort.ai/api-keys) and paste it. |
+
+`ghost login` switches between them. In a script or a container: `ghost-login --with-api-key < keyfile`.
+
+## Everyday commands
+
+| | |
+|---|---|
+| `ghost` | Start chatting. `ghost -c` continues your last chat. |
+| `ghost -z "question"` | Ask once and print the answer. |
+| `ghost --local` | Use the offline model: nothing leaves this machine. |
+| `ghost usage` / `ghost budget` | What hosted models have cost you, and the hourly limit on it. |
+| `ghost login` / `ghost logout` | Change how you're connected. |
+| `ghost update` | Get the latest release, with the options you installed with. |
+| `ghost uninstall` | Remove ghost. Your chats and settings stay unless you add `--purge`. |
+
+Inside a chat, `/model` switches models, `/goal <objective>` sets a standing goal, `/help` lists the rest.
+
+<details>
+<summary>Install options</summary>
+
+Set these as environment variables on the install command (`curl ... | GHOST_LOCAL=1 bash`). `ghost update` remembers them; `=0` switches one off again.
+
+| | |
+|---|---|
+| `GHOST_LOCAL=1` | Also install Ollama and an offline model (6GB), which becomes the fallback. `GHOST_LOCAL_32B=1` adds the stronger 32B (26GB). |
+| `GHOST_SCRUB=1` | Redact your PII and secrets from everything sent. Off by default: requests are sealed either way, and an agent works best seeing what you see. `ghost --scrub` / `--no-scrub` toggles it later. |
+| `GHOST_NO_BROWSER=1` | Skip Chromium and the computer-use driver: a smaller, faster install. |
+| `GHOST_VERBOSE=1` | Show everything the installer runs. Otherwise it's in `~/.ghost/install.log`. |
+
+On Windows, from a clone: `.\install.ps1 -Local -Scrub -NoBrowser`.
+
+An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
+
+</details>
 
 ## Why ghost exists
 
@@ -47,7 +83,7 @@ Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips th
 
 **The Problem.** Frontier models refuse, moralize, and water answers down. You ask something direct, security research, something adult, something dual-use, something merely uncomfortable, and you get a disclaimer and a redirect to "safer alternatives."
 
-**The Fix.** ghost only connects **open-weight, unrestricted models** (Abliterated Large v2 by default, with its refusals removed from the weights; plus DeepSeek V4 Pro and Hermes 4 405B/70B, steered), so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
+**The Fix.** ghost only connects **open-weight, unrestricted models** (Abliterated Large v2 by default, with its refusals removed from the weights; plus DeepSeek V4 Pro and Hermes 4 405B, steered), so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
 
 ### Problem #2: The Provider Reads Everything You Send
 
@@ -57,7 +93,7 @@ Don't need browser automation or computer use? `GHOST_NO_BROWSER=1 ...` skips th
 
 **The Problem.** "Hosted inference" means your prompts, your code, your secrets, whatever you're working on, land in plaintext on someone else's servers, logged and trained on.
 
-**The Fix.** Every hosted request is HPKE/OHTTP-encrypted by [og-veil](https://github.com/OpenGradient/veil) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and og-veil verifies the enclave's signature before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
+**The Fix.** Every hosted request is sealed on your machine (HPKE/OHTTP, with [opengradient-ohttp](https://github.com/OpenGradient/sdk/tree/main/packages/opengradient-ohttp)) and run inside a **TEE enclave**: the relay sees only ciphertext and never the prompt, the enclave runs the model but never learns who you are, and the enclave's signature is checked before a single token reaches you. Need zero egress? `ghost --local` runs an offline model where nothing leaves the box.
 
 > [!TIP]
 > And it doesn't give up. Most agents stop and ask after the first error; ghost reads the actual error, installs what's missing, changes tactics, and keeps going until the task is done. Set a standing goal with `/goal <objective>` and it works toward it across turns on its own.
@@ -88,26 +124,26 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 ## How the private path works
 
 <details>
-<summary>The full request path: bridge → og-veil → TEE enclave</summary>
+<summary>The full request path: bridge → relay → TEE enclave</summary>
 
 ```
 ghost engine
-  └─ bridge (:8788)       strip provider prefix, model steer (+ PII/secret scrub if --scrub)
-       └─ og-veil (:11435)   HPKE-encrypt, OHTTP relay, verify signature before emit
-            └─ chat-api relay   sees your account token + IP, but only ciphertext
-                 └─ TEE enclave   decrypts, runs the model, signs the output
+  └─ bridge (127.0.0.1:8788)   redaction if it's on, limits and budget, seal to an attested enclave
+       └─ relay (chat-api)       sees your login and IP, but only ciphertext
+            └─ TEE enclave       decrypts, runs the model, signs the reply (the bridge checks it)
 ```
 
-Two boundaries, the same path the [chat.opengradient.ai](https://chat.opengradient.ai) site uses: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. So the hosted path is **private, not anonymous** -- your account is still authenticated and the relay sees your IP. For true anonymity, use the local model (zero egress).
+Two boundaries, the same path [dreamfort.ai](https://www.dreamfort.ai) uses: the **relay** sees your account + IP but only ciphertext; the **enclave** sees the prompt but never your identity. So the hosted path is **private, not anonymous** -- your account is still authenticated and the relay sees your IP. For true anonymity, use the local model (zero egress).
 
 </details>
 
 ## Honest limits
 
-- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`.
+- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`. A reply is never paid for twice: what comes back unusable is reported, not retried.
+- **Replies arrive whole.** The signature covers the complete reply, so ghost shows it once it's verified rather than word by word.
 - **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
 - **The engine is forked, not rewritten.** It's one pinned Hermes release ([`engine.pin`](engine.pin)), patched and self-contained: no separate Hermes install is needed or touched, and `ghost update` is what moves it. Internal package names stay `hermes_cli`.
-- **A session runs in a background gateway.** ghost starts one local process for it, and it exits by itself after 10 idle minutes (unless you install it as a service with `ghost gateway install`).
+- **Two small background processes.** The bridge is a service (launchd, systemd or Task Scheduler) that starts with your machine. Your sessions run in a local gateway that ghost starts when you do and that exits after 10 idle minutes (unless you install it as a service with `ghost gateway install`).
 
 ## License
 

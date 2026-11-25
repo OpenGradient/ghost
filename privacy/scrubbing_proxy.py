@@ -14,7 +14,7 @@ signature on every reply:
 
 The relay sees your account and IP but only ciphertext; the enclave sees the
 prompt but not you. A reply is verified before a token of it reaches the engine.
-The login is og-veil's (`ghost-login`): it holds the session and refreshes it.
+The login (`ghost-login`) is a DreamFort account or API key: see ghost_auth.py.
 """
 import json
 import os
@@ -27,25 +27,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 from opengradient_ohttp import OHTTPTransport, TeeVerificationError
-from veil.config import session_path
-from veil.session import AuthError, Session
 
+import ghost_auth
 import spend
+from ghost_auth import AuthError
 
 # The enclave signs a fixed set of request fields; the client warns about each other one it leaves out.
 warnings.filterwarnings("ignore", message="opengradient-ohttp: ")
 
 LISTEN = ("127.0.0.1", 8788)
-LOG = os.path.expanduser("~/.ghost/privacy/scrubber.log")
-DENYLIST_FILE = os.path.expanduser("~/.ghost/privacy/pii_denylist.txt")
+STATE = os.path.join(os.environ.get("GHOST_HOME") or os.path.expanduser("~/.ghost"), "privacy")
+LOG = os.path.join(STATE, "scrubber.log")
+DENYLIST_FILE = os.path.join(STATE, "pii_denylist.txt")
 
 # NER PII scrubbing (Presidio + spaCy) with reversible placeholders. Enabled by the
 # .presidio marker; falls back hard to the legacy regex scrubber on any import/runtime
 # error so the bridge never goes down over a scrubber problem.
-PRESIDIO_MARKER = os.path.expanduser("~/.ghost/privacy/.presidio")
+PRESIDIO_MARKER = os.path.join(STATE, ".presidio")
 # Written when NER is EXPECTED (.presidio set) but unavailable/failed, so the degradation to the
 # weaker regex scrubber is visible (bin/ghost surfaces it) instead of silent. Cleared on success.
-PRESIDIO_FAILED_MARKER = os.path.expanduser("~/.ghost/privacy/.presidio_failed")
+PRESIDIO_FAILED_MARKER = os.path.join(STATE, ".presidio_failed")
 try:
     import presidio_scrub
     _PRESIDIO_OK = True
@@ -65,11 +66,9 @@ except Exception:
 # plus abliteration/abliterated-model-large-v2 (added 2026-10-29). For the abliterated model the
 # gateway proxies to the abliteration provider inside the enclave (tee-gateway#183 / chat-api#446),
 # so from ghost's side it is the same OHTTP/TEE/verify path -- no third-party key stored locally.
-# NOTE: `og-veil models` is INCOMPLETE -- it omits deepseek-v4-pro, glm-5.2 and the abliterated id
-# even though the gateway serves them. Do NOT trust that list to add a model; probe the endpoint.
-# The gateway rejects anything it doesn't serve with `Model '<id>' is not supported`.
-# hermes-4-70b was dropped by the gateway (2026-11-24) and removed here; aux tasks now use deepseek-v4.1-flash-abliterated
-# (abliterated, gateway-verified 2026-11-24; also missing from `og-veil models`).
+# To add a model, probe the endpoint: the gateway rejects anything it doesn't serve with `Model '<id>'
+# is not supported`. hermes-4-70b was dropped by the gateway (2026-11-24); side tasks now use
+# deepseek-v4.1-flash-abliterated (gateway-verified 2026-11-24).
 _CATALOG_MODELS = [
     ("abliteration/abliterated-model-large-v2", "Abliterated Large v2: refusals removed from the weights (not steered past), 1M context; for authorized offensive-security, red-team + long-horizon agents (default)"),
     ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro — strongest open reasoning + coding; best for agentic work"),
@@ -109,16 +108,15 @@ def log(m):
 # two scrub paths can never drift on the security-critical secret set.
 from scrub_patterns import EMAIL_RE, SSN_RE, CC_RE, IP_RE, PHONE_RE, SECRET_RES  # noqa: E402
 
-PASS_PATHS_SENTINEL = os.path.expanduser("~/.ghost/privacy/.pass_paths")
 # Redaction is OPT-IN and OFF BY DEFAULT. ghost is a full-fidelity agent (it does real work,
 # including authorized pentesting, so its own privacy layer must NOT silently mangle secrets it
 # legitimately reads). The ~/.ghost/privacy/.scrub marker (ghost --scrub) turns ON outbound
-# PII + secret redaction; absent (default) = pure pass-through. Privacy of the hosted path comes
-# from og-veil (OHTTP + TEE enclave) regardless of this toggle.
-SCRUB_SENTINEL = os.path.expanduser("~/.ghost/privacy/.scrub")
+# PII + secret redaction; absent (default) = pure pass-through. The hosted path is private either
+# way: every request is sealed to the enclave (OHTTP + TEE).
+SCRUB_SENTINEL = os.path.join(STATE, ".scrub")
 # When scrubbing IS on, filesystem paths are protected from redaction by default so agentic file
 # work is not blinded. Create ~/.ghost/privacy/.full_redaction to redact paths too.
-FULL_REDACTION_SENTINEL = os.path.expanduser("~/.ghost/privacy/.full_redaction")
+FULL_REDACTION_SENTINEL = os.path.join(STATE, ".full_redaction")
 PATH_RE = re.compile(r"(?:~|/[\w.\-]+)(?:/[\w.\-]+)+")
 
 
@@ -346,7 +344,6 @@ def _apply_limits(obj):
 # retried only while it has not been accepted, and a reply that comes back unusable is reported as that
 # instead of being quietly paid for again.
 UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transport; never contacted
-RELAY_PATH = "/api/v1/chat/ohttp"
 # Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice.
 TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
 _RETRY_STATUS = frozenset({500, 502, 503, 504})
@@ -354,7 +351,6 @@ _MAX_TRIES = 3
 _BREAK_WINDOW = 300.0
 
 _lock = threading.Lock()
-_session = None
 _clients = {}
 _last_break = 0.0
 
@@ -372,21 +368,12 @@ class Refused(Exception):
 
 
 def _upstream():
-    """(client, headers) for the DreamFort login. Raises AuthError when nobody is logged in."""
-    global _session
-    with _lock:
-        if _session is None or not session_path().exists():
-            _session = Session.load()
-        session = _session
-    token = session.access_token()   # refreshes when due, and notices a new login
-    cfg = session.config
-    key = (cfg.chat_api_base_url.rstrip("/") + RELAY_PATH, cfg.tee_registry_rpc_url, cfg.tee_registry_address)
+    """(client, headers) for the login in use. Raises AuthError when nobody is logged in."""
+    relay, token, registry = ghost_auth.credentials()
+    key = (relay, *registry.values())
     with _lock:
         if key not in _clients:
-            registry = {}
-            if cfg.tee_registry_rpc_url and cfg.tee_registry_address:
-                registry = {"registry_rpc_url": cfg.tee_registry_rpc_url, "registry_address": cfg.tee_registry_address}
-            transport = OHTTPTransport(relay_url=key[0], verify_before_release=True, timeout=TIMEOUT, **registry)
+            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, **registry)
             _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
         return _clients[key], {"Authorization": f"Bearer {token}"}
 
@@ -421,7 +408,8 @@ def _open(obj):
         if resp.status_code == 401:
             message = "DreamFort didn't accept this login; run `ghost-login` to connect again"
         elif resp.status_code == 402:
-            message = "your DreamFort account is out of credits"
+            message = (f"your {'DreamFort API balance' if ghost_auth.api_key() else 'DreamFort account'} is out of credits; "
+                       "add some on the website and try again")
         raise Refused(resp.status_code, message)
 
 
@@ -621,6 +609,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path
         n = int(self.headers.get("Content-Length", 0) or 0)
         raw = self.rfile.read(n) if n else b""
+        if self.headers.get("Origin"):   # a web page: it must not spend your credits behind your back
+            self._error(403, "ghost's bridge doesn't answer web pages")
+            return
         if not ("chat/completions" in path or path.endswith("/completions")):
             self._error(404, "ghost scrubbing bridge only serves /v1/chat/completions")
             return
@@ -655,7 +646,7 @@ class Handler(BaseHTTPRequestHandler):
             reply = _generate(obj)
         except AuthError as e:
             log(f"not logged in: {e}")
-            self._error(401, "not logged in to DreamFort; run `ghost-login`")
+            self._error(401, str(e))
             return
         except Refused as e:
             log(f"refused ({e.status}): {e}")

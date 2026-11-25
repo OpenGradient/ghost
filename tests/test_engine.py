@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,14 +45,9 @@ pytestmark = pytest.mark.skipif(
 
 def _hosted_profile(home):
     """The profile as the default (hosted-only) install writes it."""
-    text = (REPO / "profile" / "config.yaml").read_text(encoding="utf-8")
-    text = text.replace("__HOME__", Path.home().as_posix()).replace("__LOCAL_MODEL__", "ghost-tool:latest")
-    installer = (REPO / "install.sh").read_text(encoding="utf-8")
-    script = re.search(r"hosted-only.*?<<'PYEOF'\n(.*?)\nPYEOF", installer, re.S).group(1)
-    path = home / "config.yaml"
-    path.write_text(text, encoding="utf-8")
-    subprocess.run([str(_store_python()), "-", str(path)], input=script, text=True, check=True, capture_output=True)
-    return path
+    subprocess.run([sys.executable, str(REPO / "scripts" / "write_profile.py"), str(home), "--ghost-home", str(GHOST_HOME)],
+                   check=True, capture_output=True)
+    return home / "config.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -116,7 +112,7 @@ def test_personality_is_active(engine):
 def test_every_side_task_is_pinned(profile, defaults):
     tasks = {k for k, v in defaults["auxiliary"].items() if isinstance(v, dict) and "provider" in v}
     pinned = profile["auxiliary"]
-    assert tasks - set(pinned) == set(), "unpinned side tasks could leave og-veil"
+    assert tasks - set(pinned) == set(), "unpinned side tasks could leave the enclave"
     assert set(pinned) - tasks == set(), "the engine no longer has these side tasks"
     for name, route in pinned.items():
         assert route["provider"] == "opengradient", name

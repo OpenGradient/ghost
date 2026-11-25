@@ -16,9 +16,11 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
 
 ## What we treat as P0
 
-- **Any PII or secret leak** to og-veil, the chat-api relay, or the enclave -- e.g. a request
-  field that is not scrubbed, a placeholder that is de-anonymized into an egress tool, or the
-  inference route being repointed away from the local scrubber.
+- **Any PII or secret leak** to the relay or the enclave while redaction is on -- e.g. a request
+  field that is not scrubbed, a placeholder that is de-anonymized into an egress tool -- or the
+  inference route being repointed away from the local bridge.
+- **A login leaking** -- your session or API key readable by another user, logged, or sent anywhere
+  but DreamFort.
 - **A response accepted without verification** (the verify-before-emit guarantee bypassed).
 - **The engine phoning home** -- an update check, telemetry, a remote catalog or plugin fetch, or a
   side task that leaves the private path.
@@ -27,8 +29,8 @@ Include what you found, how to reproduce it, and the impact. We aim to acknowled
 
 This repo owns the local harness: the PII/secret scrubber (`privacy/`), the install + service
 wiring, and the engine fork. The OHTTP/HPKE/TEE protocol and response verification live in
-[og-veil](https://github.com/OpenGradient/veil); report issues in that layer there. The
-underlying agent engine is [Hermes Agent](https://hermes-agent.nousresearch.com).
+[opengradient-ohttp](https://github.com/OpenGradient/sdk/tree/main/packages/opengradient-ohttp); report
+issues in that layer there. The underlying agent engine is [Hermes Agent](https://hermes-agent.nousresearch.com).
 
 ## Before you commit
 
