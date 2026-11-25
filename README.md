@@ -52,7 +52,7 @@ The first run asks how you want to log in. Nothing is contacted before that.
 | `ghost usage` / `ghost budget` | What hosted models have cost you, what credits are left, and the hourly limit. |
 | `ghost login` / `ghost logout` | Change how you're connected. |
 | `ghost update` | Get the latest release, with the options you installed with. |
-| `ghost uninstall` | Remove ghost. Your chats and settings stay unless you add `--purge`. |
+| `ghost uninstall` | Remove ghost. Your chats, settings and login stay unless you add `--purge`. |
 
 Inside a chat, `/model` switches models, `/goal <objective>` sets a standing goal, `/help` lists the rest.
 
@@ -71,7 +71,7 @@ On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File .\install.ps
 
 An update keeps the settings you changed in `~/.ghost/profiles/uncensored/config.yaml`, and a `SOUL.md` of your own (the release's is then beside it, as `SOUL.md.new`).
 
-**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection, and falls back to an enclave built into the release.
+**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection, and falls back to an enclave built into the release. Installing also needs `github.com`, `*.githubusercontent.com`, `astral.sh`, `*.astral.sh`, `pypi.org`, `files.pythonhosted.org`, `nodejs.org`, `registry.npmjs.org` and, for the browser, `cdn.playwright.dev` and `storage.googleapis.com`.
 
 </details>
 
@@ -149,7 +149,7 @@ The agent's own web searches, page fetches and browser go out from your machine 
 - **Chats don't stay.** A chat is deleted a day after it ends, along with what you typed. To keep them, set `sessions.auto_prune: false` in `~/.ghost/profiles/uncensored/config.yaml`.
 - **Your keys stay yours.** Keys for other vendors in your environment (OpenAI, OpenRouter, ...) are kept from the engine, so nothing goes to them by surprise. Put one in `~/.ghost/profiles/uncensored/.env` to use it on purpose.
 - **Replies arrive whole.** The signature covers the complete reply, so ghost shows it once it's verified rather than word by word.
-- **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
+- **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a much smaller model, and it shows in long agentic work.
 - **It asks before it deletes.** Commands that delete folders, overwrite system files and the like wait for your OK; `--yolo` turns that off.
 - **The engine is forked, not rewritten.** It's one pinned Hermes release ([`engine.pin`](engine.pin)), patched and self-contained: no separate Hermes install is needed or touched, and `ghost update` is what moves it. Internal package names stay `hermes_cli`.
 - **Two small background processes.** The bridge is a service (launchd, systemd or Task Scheduler) that starts with your machine. Your sessions run in a local gateway that ghost starts when you do and that exits after 10 idle minutes (unless you install it as a service with `ghost gateway install`).
