@@ -36,10 +36,11 @@ def bridge():
 def relay():
     """The relay's own config document: it answers only a login it accepts, and nothing is run or billed."""
     import httpx
+    import outbound
     started = time.monotonic()
     try:
         address, token = ghost_auth.credentials()
-        resp = httpx.get(f"{address}/config", headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        resp = httpx.get(f"{address}/config", headers={"Authorization": f"Bearer {token}"}, timeout=20, verify=outbound.trust())
     except AuthError as e:
         return False, str(e), "ghost login"
     except httpx.HTTPError as e:

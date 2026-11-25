@@ -182,7 +182,9 @@ check_machine() {
 }
 
 install_bridge() {
-  ( cd "$REPO" && UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" uv sync --python 3.11 --frozen )
+  # (Again with the system's certificates, for a network that has one of its own.)
+  ( cd "$REPO" && export UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" \
+    && { uv sync --python 3.11 --frozen || UV_SYSTEM_CERTS=1 UV_NATIVE_TLS=1 uv sync --python 3.11 --frozen; } )
   mkdir -p "$PRIV"
   if [ -e "$PRIV/.scrub" ]; then   # someone relied on it: say so rather than let them find out
     NOTES+=("Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first.")
