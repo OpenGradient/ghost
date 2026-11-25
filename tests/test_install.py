@@ -111,7 +111,7 @@ def test_fresh_install(machine, system):
         assert os.access(m.commands / name, os.X_OK) and "__" not in (m.commands / name).read_text()
     assert (m.ghost / ".src").read_text() == f"{m.repo}\n" and (m.ghost / ".install-env").read_text() == ""
     config = (m.profile / "config.yaml").read_text()
-    assert "ollama-local\n  model" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config and "__" not in config
+    assert "ollama-local" not in config and "__" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config
     assert (m.profile / ".env").exists() and (m.ghost / "privacy" / "uncensored_prefill.json").exists()
 
 
@@ -192,6 +192,17 @@ def test_someone_who_had_redaction_on_is_told_it_is_gone(machine):
     (m.ghost / "privacy" / ".scrub").touch()
     assert "Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first." in m.install().stdout
     assert "Redaction was removed" not in m.install().stdout   # once
+
+
+def test_an_update_brings_the_new_model_list(machine):
+    m = machine()
+    m.install()
+    (m.profile / "cache").mkdir()
+    caches = [m.profile / name for name in ("provider_models_cache.json", "models_dev_cache.json", "cache/model_catalog.json")]
+    for cache in caches:
+        cache.write_text("{}")
+    m.install()
+    assert not any(cache.exists() for cache in caches)
 
 
 def test_your_edits_are_kept_beside_the_new_files(machine):

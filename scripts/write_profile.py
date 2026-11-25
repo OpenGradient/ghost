@@ -22,6 +22,7 @@ def config(ghost_home, local_model=None):
     if not local_model:   # hosted-only: nothing is served locally, so side tasks and the fallback are hosted too
         text = re.sub(r"provider: ollama-local\n(\s*)model: \S+", rf"provider: opengradient\n\1model: {SIDE_TASKS}", text)
         text = re.sub(r"(?m)^(fallback_model:\n  provider: opengradient\n  model: )\S+", rf"\g<1>{FALLBACK}", text)
+        text = re.sub(r"(?m)^  ollama-local:\n(?:    .*\n)+", "", text)   # or /model would offer it
     return text
 
 
@@ -50,6 +51,8 @@ def main(argv=None):
         previous = install(args.profile / name, text, keep=yours)
         if previous:
             print(f"your previous {name} is kept as {previous}")
+    for cache in ("provider_models_cache.json", "models_dev_cache.json", "cache/model_catalog.json"):
+        (args.profile / cache).unlink(missing_ok=True)   # what /model lists, which a new release may have changed
     env = args.profile / ".env"
     if not env.exists():
         env.write_bytes((SOURCE / ".env.example").read_bytes())

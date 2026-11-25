@@ -190,7 +190,7 @@ def run_local(args, config):
         models = subprocess.run([ollama, "list"], capture_output=True, text=True, timeout=15).stdout
     except (OSError, subprocess.SubprocessError):
         models = ""
-    if model.split(":")[0] not in models:
+    if model.split(":")[0] not in models or "\n  ollama-local:\n" not in config:
         say(f"no local model installed ({model}). Reinstall with GHOST_LOCAL=1 to add the offline model.")
         return 1
     if sys.stderr.isatty():
