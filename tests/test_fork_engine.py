@@ -198,7 +198,7 @@ def test_what_a_chat_leaves_running_does_not_count_either(box):
         os.killpg(box.procs[-1].pid, 9)
 
 
-@pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+@pytest.mark.parametrize("stop", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_build_that_is_stopped_restores_the_previous_engine(box, stop):
     """Ctrl-C, a shutdown, or a closed terminal window."""
     assert box.run(src=box.source("one")).returncode == 0
@@ -210,7 +210,7 @@ def test_a_build_that_is_stopped_restores_the_previous_engine(box, stop):
     while not (box.home / "building").exists():
         assert time.time() < deadline
         time.sleep(0.05)
-    os.killpg(build.pid, stop)
+    os.killpg(build.pid, getattr(signal, stop))
     assert build.wait(timeout=20) == 130
     assert (box.engine / "one").exists() and not (box.engine / "two").exists() and not box.old.exists()
 
