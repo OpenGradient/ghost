@@ -71,7 +71,7 @@ On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File .\install.ps
 
 An update keeps the settings you changed in `~/.ghost/profiles/uncensored/config.yaml`, and a `SOUL.md` of your own (the release's is then beside it, as `SOUL.md.new`).
 
-**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`, which a Mac with a proxy script needs) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection, and has only the enclaves it knew when it was released to go by, which change every few weeks. Installing also needs `github.com`, `*.githubusercontent.com`, `astral.sh`, `*.astral.sh`, `pypi.org`, `files.pythonhosted.org`, `nodejs.org`, `registry.npmjs.org` and, for the browser, `cdn.playwright.dev` and `storage.googleapis.com`.
+**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`, which a Mac with a proxy script needs) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection. Without it, ghost goes by the enclaves it knew when it was released, and those change whenever OpenGradient deploys. Installing also needs `github.com`, `*.githubusercontent.com`, `astral.sh`, `*.astral.sh`, `pypi.org`, `files.pythonhosted.org`, `nodejs.org`, `registry.npmjs.org` and, for the browser, `cdn.playwright.dev` and `storage.googleapis.com`.
 
 </details>
 
