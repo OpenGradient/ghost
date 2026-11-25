@@ -294,6 +294,7 @@ def machine(dream, tmp_path, monkeypatch):
     monkeypatch.setattr(spend, "_entries", [(time.time(), 0.21)])
     monkeypatch.setattr(spend, "BUDGET_FILE", tmp_path / "budget")
     monkeypatch.setattr(spend, "LEDGER", tmp_path / "spend.jsonl")
+    monkeypatch.setattr("enclaves.Enclaves.listed", lambda self: 3)
     return doctor
 
 
@@ -301,7 +302,7 @@ def test_doctor_when_all_is_well(dream, machine, capsys):
     ghost_auth.save_account(dream.bundle())
     assert machine.main() == 0
     out = capsys.readouterr().out
-    for words in ("✓ Engine     Ghost v9 (stub)", "✓ Login      DreamFort account (mara@example.com)", "✓ Bridge     running", "✓ DreamFort  reachable",
+    for words in ("✓ Engine     Ghost v9 (stub)", "✓ Login      DreamFort account (mara@example.com)", "✓ Bridge     running", "✓ DreamFort  reachable", "✓ Enclaves   3 in the registry",
                   "✓ Credits    $12.50 left", "✓ Spending   $0.21 of $5.00"):
         assert words in out
     assert [s[1] for s in dream.seen] == ["/api/v1/chat/ohttp/config", "/api/v1/credits/balance"]   # and no model
@@ -326,6 +327,17 @@ def test_doctor_says_what_is_wrong_and_what_to_do(dream, machine, monkeypatch, c
     ghost_auth.save_account(dream.bundle())
     wrong(dream, monkeypatch)
     assert machine.main() == 1 and words in capsys.readouterr().out
+
+
+def test_doctor_when_the_registry_is_down(dream, machine, monkeypatch, capsys):
+    """Nothing to fix here: ghost has a fallback."""
+    import enclaves
+
+    def down(self):
+        raise enclaves.RegistryError("502")
+    monkeypatch.setattr("enclaves.Enclaves.listed", down)
+    ghost_auth.save_account(dream.bundle())
+    assert machine.main() == 0 and "· Enclaves   the registry can't be read right now" in capsys.readouterr().out
 
 
 def test_usage_shows_what_is_left(dream, machine, capsys):

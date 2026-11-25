@@ -14,6 +14,7 @@ key: see ghost_auth.py.
 import json
 import os
 import random
+import re
 import threading
 import time
 import warnings
@@ -25,6 +26,7 @@ from opengradient_ohttp import OHTTPTransport, TeeVerificationError
 import ghost_auth
 import outbound
 import spend
+from enclaves import REGISTRY, Enclaves
 from ghost_auth import AuthError
 from localhttp import LocalServer
 
@@ -155,7 +157,7 @@ _NO_REASONING = frozenset({"hermes-4-405b"})
 def _apply_limits(obj):
     asked = obj.get("max_tokens") or obj.get("max_completion_tokens")
     obj.pop("max_completion_tokens", None)
-    obj["max_tokens"] = min(int(asked), MAX_TOKENS) if asked else MAX_TOKENS
+    obj["max_tokens"] = min(asked, MAX_TOKENS) if isinstance(asked, int) and asked > 0 else MAX_TOKENS
     effort = str(obj.get("reasoning_effort") or DEFAULT_EFFORT).lower()
     effort = _EFFORT_ALIASES.get(effort, effort)
     obj["reasoning_effort"] = effort if effort in _EFFORTS else DEFAULT_EFFORT
@@ -169,10 +171,10 @@ def _apply_limits(obj):
 # retried only while it has not been accepted, and a reply that comes back unusable is reported as that
 # instead of being quietly paid for again.
 UPSTREAM = "https://ohttp.invalid/v1/chat/completions"   # routed by the transport; never contacted
-REGISTRY = "https://ogevmdevnet.opengradient.ai"         # only to look up its proxy; the transport has its own
 # Hidden reasoning is silent, sometimes for minutes: giving up on it only means paying twice.
 TIMEOUT = httpx.Timeout(1200.0, connect=15.0, pool=60.0)
-_RETRY_STATUS = frozenset({500, 502, 503, 504})
+_RETRY_STATUS = frozenset({500, 502, 503})   # (a 504 is a load balancer giving up on a request that goes on running)
+_NEVER_ARRIVED = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.WriteError, httpx.WriteTimeout, httpx.ProxyError)
 _MAX_TRIES = 3
 _BUSY_WAITS = (5, 10, 20, 30)   # seconds: the relay takes 40 requests a minute, which a quick agent can reach
 _BREAK_WINDOW = 300.0
@@ -200,8 +202,8 @@ def _upstream():
     key = (relay, outbound.proxy(relay))   # a laptop changes networks
     with _lock:
         if key not in _clients:
-            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, transport=outbound.transport(relay),
-                                       registry_transport=outbound.transport(REGISTRY, public_only=True))
+            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, transport=outbound.transport(relay))
+            transport._resolver = Enclaves(outbound.transport(REGISTRY, public_only=True), log)
             _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
         return _clients[key], {"Authorization": f"Bearer {token}"}
 
@@ -221,19 +223,22 @@ def _open(obj):
         client, headers = _upstream()
         try:
             resp = client.send(client.build_request("POST", UPSTREAM, json=obj, headers=headers), stream=True)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+        except _NEVER_ARRIVED as e:
             tries += 1
             if tries == _MAX_TRIES:
-                raise Refused(502, f"couldn't reach DreamFort ({type(e).__name__}); check your connection and try again") from e
+                why = f"your proxy said: {e}" if isinstance(e, httpx.ProxyError) else type(e).__name__
+                raise Refused(502, f"couldn't reach DreamFort ({why}); check your connection and try again") from e
             log(f"relay unreachable (try {tries}): {e}; retrying")
             _backoff(tries - 1)
             continue
         if resp.status_code < 400:
             return resp
         try:
-            message = _decode_error(resp.read())
+            message = _decode_error(resp.read(), resp.status_code)
         finally:
             resp.close()
+        if resp.status_code == 504:
+            raise httpx.ReadTimeout(message)
         if resp.status_code == 429 and waits:
             log(f"too many requests this minute; waiting {waits[0]}s")
             _wait(waits.pop(0))
@@ -318,6 +323,15 @@ class Reply:
         return body
 
 
+def _host_failed(error):
+    """What the enclave says when the model's host failed it. Nothing is billed: it settles a finished reply."""
+    message = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+    status = int(next(iter(re.findall(r"Error code: (\d{3})", message)), 502))
+    if status not in (400, 404, 413, 422):   # those are about the request (too long, say), which the engine can act on
+        status = 502
+    return Refused(status, f"the model's host answered: {message[:600]}")
+
+
 def _generate(obj):
     """One generation, verified and whole. Always streamed from the enclave: its buffered form cuts long
     replies off at the relay's timeout and quietly 'repairs' a truncated tool call into valid JSON."""
@@ -325,10 +339,9 @@ def _generate(obj):
     why = spend.paused()
     if why:
         raise Refused(422, why)
-    reply = Reply(obj["max_tokens"])
-    resp = _open({**obj, "stream": True})
-    ended = False
+    reply, resp, ended = Reply(obj["max_tokens"]), None, False
     try:
+        resp = _open({**obj, "stream": True})
         for line in resp.iter_lines():
             if not line.startswith("data:"):
                 continue
@@ -338,23 +351,28 @@ def _generate(obj):
                 break
             event = json.loads(data)
             if event.get("error"):
-                raise httpx.RemoteProtocolError(str(event["error"])[:200])
+                raise _host_failed(event["error"])
             reply.feed(event)
             ended = ended or reply.finish is not None
         if not ended:
             raise httpx.RemoteProtocolError("the reply stopped early")
-    except (httpx.HTTPError, TeeVerificationError, ValueError) as e:
-        # Accepted, so billed, but we never got it. One engine retry is fair; a second break in a row is not.
+    except (AuthError, Refused):   # never accepted, or never billed
+        raise
+    except Exception as e:
+        # Accepted, so billed, but we never got it (cut off, unverifiable, unreadable). One engine retry is fair;
+        # a second break in a row is not.
         tokens_in = len(json.dumps(obj)) // 4
         spend.record(obj.get("model"), tokens_in, 2000, spend.estimate(obj.get("model"), tokens_in, 2000))
         again, _last_break = time.time() - _last_break < _BREAK_WINDOW, time.time()
         log(f"reply lost after it was accepted: {type(e).__name__}: {e}")
-        message = f"the connection to the enclave broke before the reply arrived ({type(e).__name__})"
+        message = ("a reply came back without the enclave's signature on it, so it was thrown away" if isinstance(e, TeeVerificationError)
+                   else f"the connection to the enclave broke before the reply arrived ({type(e).__name__})")
         if again:
-            raise Unusable(message + " twice in a row; each attempt is billed, so ghost stopped retrying. Try again in a moment.") from e
+            raise Unusable(message + ", twice in a row; each attempt is billed, so ghost stopped retrying. Try again in a moment.") from e
         raise Refused(502, message) from e
     finally:
-        resp.close()
+        if resp is not None:
+            resp.close()
     tokens_in = int(reply.usage.get("prompt_tokens") or 0)
     cost = reply.cost if reply.cost is not None else spend.estimate(obj.get("model"), tokens_in, reply.tokens_out)
     spend.record(obj.get("model"), tokens_in, reply.tokens_out, cost)
@@ -363,17 +381,21 @@ def _generate(obj):
     return reply
 
 
-def _decode_error(raw: bytes) -> str:
+def _decode_error(raw: bytes, status) -> str:
+    """What an error reply says, in a line for people."""
     try:
         data = json.loads(raw)
-        if isinstance(data, dict):
-            err = data.get("error")
-            if isinstance(err, dict):
-                return str(err.get("message") or err)
-            return str(err or data.get("detail") or "the relay returned an error")
-    except Exception:
-        pass
-    return raw.decode("utf-8", errors="ignore")[:300] or "the relay returned an error"
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict) and error.get("code") == "tee_not_active":
+            return "the enclave ghost picked isn't active any more; if this keeps happening, run `ghost update`"
+        message = str((error.get("message") or error) if isinstance(error, dict) else error or data.get("detail") or "")
+    except (ValueError, AttributeError):
+        message = raw.decode("utf-8", errors="ignore")
+    quoted = re.search(r"\(relay: (.*)\)\s*$", message, re.S)   # opengradient-ohttp's own words are about API keys
+    message = (quoted.group(1) if quoted else message).strip()
+    if not message or message.startswith("<"):   # some proxy's page
+        return f"DreamFort isn't answering properly ({status}); try again in a moment"
+    return message[:600]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -457,7 +479,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             obj = json.loads(raw)
-        except Exception as e:
+            if not isinstance(obj, dict):
+                raise ValueError("not an object")
+        except ValueError as e:
             self._error(400, f"invalid JSON body: {e}")
             return
 

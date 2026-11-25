@@ -1,4 +1,4 @@
-"""ghost doctor: is everything between you and a model in order? Contacts DreamFort only, and no model."""
+"""ghost doctor: is everything between you and a model in order? Contacts DreamFort and the TEE registry, and no model."""
 import subprocess
 import sys
 import time
@@ -52,6 +52,16 @@ def relay():
     return True, f"reachable, login accepted ({(time.monotonic() - started) * 1000:.0f} ms)", None
 
 
+def enclaves():
+    """The registry says which enclaves there are. Without it, ghost has some built in."""
+    import outbound
+    from enclaves import REGISTRY, Enclaves, RegistryError
+    try:
+        return True, f"{Enclaves(outbound.transport(REGISTRY, public_only=True)).listed()} in the registry", None
+    except RegistryError:
+        return None, "the registry can't be read right now, so the one built into ghost is used", None
+
+
 def credits():
     if ghost_auth.api_key():
         return True, "see https://api.dreamfort.ai", None
@@ -77,7 +87,7 @@ def main():
     failed = False
     checks = [("Engine", engine), ("Login", login), ("Bridge", bridge)]
     if ghost_auth.mode():   # nothing is contacted before you log in
-        checks += [("DreamFort", relay), ("Credits", credits)]
+        checks += [("DreamFort", relay), ("Enclaves", enclaves), ("Credits", credits)]
     print()
     for name, check in (*checks, ("Spending", spending)):
         ok, detail, fix = check()

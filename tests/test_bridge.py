@@ -15,9 +15,12 @@ from http.server import ThreadingHTTPServer
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "privacy"))
+sys.path[:0] = [os.path.join(os.path.dirname(__file__), "..", "privacy"), os.path.dirname(__file__)]
 pytest.importorskip("opengradient_ohttp")
 import bridge as sp  # noqa: E402
+import enclaves  # noqa: E402
+import fake_dreamfort  # noqa: E402
+import outbound  # noqa: E402
 import spend  # noqa: E402
 
 REAL_UPSTREAM = sp._upstream
@@ -61,21 +64,22 @@ class Enclave:
 
 
 @pytest.fixture
-def enclave(monkeypatch, tmp_path):
+def enclave(monkeypatch):
     enclave = Enclave()
     client = httpx.Client(transport=httpx.MockTransport(enclave))
     monkeypatch.setattr(sp, "_upstream", lambda: (client, {"Authorization": "Bearer t"}))
+    return enclave
+
+
+@pytest.fixture
+def bridge(monkeypatch, tmp_path):
     monkeypatch.setattr(sp, "_backoff", lambda attempt: None)
+    monkeypatch.setattr(sp, "_wait", lambda seconds: None)
     monkeypatch.setattr(sp, "_last_break", 0.0)
     monkeypatch.setattr(sp, "LOG", str(tmp_path / "log"))
     for name, value in (("DIR", tmp_path), ("LEDGER", tmp_path / "spend.jsonl"), ("BUDGET_FILE", tmp_path / "budget")):
         monkeypatch.setattr(spend, name, value)
     monkeypatch.setattr(spend, "_entries", None)
-    return enclave
-
-
-@pytest.fixture
-def bridge(enclave):
     server = ThreadingHTTPServer(("127.0.0.1", 0), sp.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -119,7 +123,7 @@ def test_the_enclave_is_always_streamed(enclave, bridge, stream):
 
 
 # ── good replies ──────────────────────────────────────────────────────────────
-def test_streamed_reply(bridge):
+def test_streamed_reply(enclave, bridge):
     status, body = bridge()
     assert status == 200 and '"content": "hi"' in body and body.rstrip().endswith("data: [DONE]")
 
@@ -183,7 +187,7 @@ def test_refusals_are_passed_on(enclave, bridge, failure, status, words):
     assert got[0] == status and words in got[1] and enclave.accepted == []
 
 
-def test_a_busy_relay_is_waited_out(monkeypatch, enclave, bridge):
+def test_a_busy_relay_is_waited_out(enclave, bridge, monkeypatch):
     """It limits requests per minute, and a request it turned away was never accepted."""
     waits = []
     monkeypatch.setattr(sp, "_wait", waits.append)
@@ -211,7 +215,7 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     seen = []
 
     class Transport(httpx.BaseTransport):
-        def __init__(self, relay_url, verify_before_release, timeout, transport, registry_transport):   # and no registry of ours
+        def __init__(self, relay_url, verify_before_release, timeout, transport):   # and no registry of ours
             assert verify_before_release is True
             self.relay = relay_url
 
@@ -238,6 +242,84 @@ def test_it_answers_as_soon_as_it_starts(monkeypatch):
     server = sp.LocalServer(("127.0.0.1", 0), sp.Handler)
     assert server.server_port == server.server_address[1] and server.server_name == "127.0.0.1"
     server.server_close()
+
+
+# ── through the real sealing, against a stand-in DreamFort ────────────────────
+@pytest.fixture
+def dream(monkeypatch):
+    service = fake_dreamfort.DreamFort()
+    server = fake_dreamfort.serve(service)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    monkeypatch.setattr(outbound, "transport", lambda url, public_only=False: fake_dreamfort.Redirected(server.server_port))
+    monkeypatch.setattr(sp.ghost_auth, "credentials", lambda: (url + sp.ghost_auth.API_KEY_RELAY, fake_dreamfort.API_KEY))
+    monkeypatch.setattr(sp.ghost_auth, "api_key", lambda: fake_dreamfort.API_KEY)
+    monkeypatch.setattr(sp, "_clients", {})
+    yield service
+    server.shutdown()
+    server.server_close()
+
+
+def says(content):
+    return {"messages": [{"role": "user", "content": content}]}
+
+
+def test_a_sealed_request_is_answered(dream, bridge):
+    status, body = bridge(stream=False, **says("[[say hello there]]"))
+    assert status == 200 and json.loads(body)["choices"][0]["message"]["content"] == "hello there" and len(dream.billed) == 1
+    assert dream.accepted[0]["messages"] == [{"role": "user", "content": "[[say hello there]]"}] and spend.spent(3600) == pytest.approx(0.001)
+
+
+BROKE = ("the connection to the enclave broke", "twice in a row")
+@pytest.mark.parametrize("kind, statuses, billed, words", [
+    # refused: not billed, and said plainly
+    ("402", (402, 402), 0, ("out of credits",)), ("429", (429, 429), 0, ("Rate limit exceeded: 40 per 1 minute",)),
+    ("451", (451, 451), 0, ("Content policy violation",)), ("503", (503, 503), 0, ("TEE OHTTP request failed",)),
+    ("page", (502, 502), 0, ("DreamFort isn't answering properly (502)",)), ("retired", (502, 502), 0, ("isn't active any more",)),
+    # billed, maybe, but never delivered: the engine may try once more, and that's all
+    ("504", (502, 422), 2, BROKE), ("silent", (502, 422), 2, BROKE), ("empty", (502, 422), 2, BROKE), ("cut", (502, 422), 2, BROKE),
+    ("drop", (502, 422), 2, BROKE), ("forged", (502, 422), 2, ("without the enclave's signature", "twice in a row")), ("unsigned", (502, 422), 2, BROKE),
+    # the model's host failed: not billed, and it says why (a prompt that's too long is the engine's to shorten)
+    ("host400", (400, 400), 0, ("maximum context length",)), ("host503", (502, 502), 0, ("overloaded",)),
+])
+def test_however_a_request_fails(dream, bridge, kind, statuses, billed, words):
+    got = [bridge(**says(f"[[fail {kind}]] {i}")) for i in range(2)]
+    assert tuple(status for status, _ in got) == statuses and len(dream.billed) == billed
+    assert all(any(word in message for _, message in got) for word in words)
+    assert len(dream.accepted) <= 2 and (spend.spent(3600) > 0) == bool(billed)   # what may have been billed counts
+
+
+def test_when_the_registry_cannot_be_read(monkeypatch, dream, bridge):
+    """Its chain has gone down; DreamFort's apps fall back to enclaves they know, and so does ghost."""
+    ours = fake_dreamfort.Enclave()
+    pem = ours.rsa.public_key().public_bytes(fake_dreamfort.serialization.Encoding.PEM, fake_dreamfort.serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    dream.registry_up, listed, dream.enclave = False, dream.enclave, ours
+    monkeypatch.setattr(enclaves, "BUILT_IN", (enclaves._enclave("https://ours.test", pem, ours.public.hex()),))
+    assert bridge(**says("[[say one]]"))[0] == bridge(**says("[[say two]]"))[0] == 200
+    with open(sp.LOG) as fh:
+        assert fh.read().count("the TEE registry can't be read") == 1   # and it isn't asked again each time
+    dream.registry_up, dream.enclave = True, listed   # back, and the built-in one retired: the registry decides again
+    assert bridge(**says("[[say three]]"))[0] == 200 and len(dream.billed) == 3
+
+
+def test_the_built_in_enclaves_are_the_apps_own():
+    """chat-app's lib/api/backupTees.ts and chat-api's src/core/backup_tees.py list the same one."""
+    assert [t.tee_id for t in enclaves.BUILT_IN] == ["0xe1443d7ed558fbd19117c4dc70e6245fc71d6063d64af3bc3f790081bc94e9aa"]
+    assert all(len(t.ohttp_public_key) == 32 for t in enclaves.BUILT_IN)
+
+
+# ── what else the bridge answers ──────────────────────────────────────────────
+@pytest.mark.parametrize("body", [b"", b"[]", b'"hi"', b"{", b"null"])
+def test_nonsense_is_turned_away(enclave, bridge, body):
+    req = urllib.request.Request(f"{bridge.url}/v1/chat/completions", body, {"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as failed:
+        urllib.request.urlopen(req, timeout=5)
+    assert failed.value.code == 400 and enclave.seen == 0
+
+
+@pytest.mark.parametrize("asked", ["lots", -1, 0, 1.5, [], None])
+def test_a_nonsense_limit_is_the_usual_one(enclave, bridge, asked):
+    assert bridge(max_tokens=asked)[0] == 200 and enclave.accepted[0]["max_tokens"] == 32000
 
 
 def test_the_bridge_says_which_process_it_is(bridge):
@@ -315,5 +397,5 @@ def test_budget_survives_a_restart(monkeypatch, enclave, bridge):
     (["budget"], 0, "$5.00 per hour"), (["budget", "20"], 0, "$20.00 per hour"), (["budget", "off"], 0, "no limit"),
     (["budget", "-3"], 2, ""), (["usage"], 0, "Last hour"),
 ])
-def test_usage_commands(enclave, capsys, argv, code, words):
+def test_usage_commands(bridge, capsys, argv, code, words):
     assert spend.main(argv) == code and words in capsys.readouterr().out
