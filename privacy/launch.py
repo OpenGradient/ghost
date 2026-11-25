@@ -43,9 +43,6 @@ ghost -- a private, unrestricted agent in your terminal
   ghost update              get the latest release
   ghost uninstall           remove ghost
 
-  ghost --scrub             redact your PII and secrets from everything sent (--no-scrub to stop)
-  ghost --preview "text"    show what redaction would remove, without sending anything
-
 Everything else goes to the engine, for example: ghost sessions, ghost gateway, ghost doctor, ghost config
 (each takes --help)."""
 
@@ -143,7 +140,7 @@ def _start_process():
         python = python.with_name("pythonw.exe") if python.with_name("pythonw.exe").exists() else python
         extra = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     with open(PRIV / "bridge.log", "ab") as out:
-        subprocess.Popen([str(python), "-Es", str(PRIV / "scrubbing_proxy.py")], stdin=subprocess.DEVNULL,
+        subprocess.Popen([str(python), "-Es", str(PRIV / "bridge.py")], stdin=subprocess.DEVNULL,
                          stdout=out, stderr=out, cwd=str(HOME), **extra)
 
 
@@ -220,9 +217,6 @@ def status_line(config, args):
     today = spend.spent(spend.DAY)
     if today >= 0.005:
         parts.append(f"${today:.2f} in the last 24h")
-    if (PRIV / ".scrub").exists():
-        detects = (PRIV / ".presidio").exists() and not (PRIV / ".presidio_failed").exists()
-        parts.append("redaction on" if detects else "redaction on, but not of names (reinstall with GHOST_SCRUB=1)")
     return " · ".join(parts)
 
 
@@ -240,23 +234,11 @@ def main(argv):
         return ghost_login.main(args[1:] if command == "login" else ["--logout"])
     if command in ("usage", "budget"):
         return spend.main(args)
-    if command == "--preview":
-        try:
-            import presidio_scrub
-            print(presidio_scrub.preview(" ".join(args[1:]) or sys.stdin.read()))
-        except ImportError:
-            say("the preview needs the name detector, which isn't installed. Reinstall with GHOST_SCRUB=1 to add it.")
-            return 1
-        return 0
-
-    while args and args[0] in ("--scrub", "--no-scrub", "--noscrub", "--local", "--paths", "--code"):
-        flag = args.pop(0)
-        if flag == "--scrub":
-            (PRIV / ".scrub").touch()
-        elif flag in ("--no-scrub", "--noscrub"):
-            (PRIV / ".scrub").unlink(missing_ok=True)
-        elif flag == "--local":
-            local = True   # (--paths is accepted and does nothing: redaction always leaves paths alone)
+    if command in ("--scrub", "--preview"):   # never let someone believe it's still on
+        say(f"redaction was removed: what you send is sealed to a TEE enclave, but as you wrote it. Run ghost without {command}.")
+        return 2
+    while args and args[0] in ("--local", "--no-scrub", "--noscrub", "--paths", "--code"):
+        local |= args.pop(0) == "--local"   # (the others went with redaction)
 
     config = _config()
     if local:

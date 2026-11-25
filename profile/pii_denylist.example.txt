@@ -1,5 +1,0 @@
-# One term per line, case-insensitive -> [REDACTED_PII] in OUTBOUND (hosted) content only.
-# Add your name, email, handles, employer. The local default never routes through the scrubber.
-Your Name
-you@example.com
-your_handle

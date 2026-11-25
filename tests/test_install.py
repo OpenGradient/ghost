@@ -53,8 +53,7 @@ class Machine:
         log = 'echo "$(basename "$0") $*" >> "$HOME/calls"\n'
         self.stub("uname", f"echo {system}\n")
         self.stub("uv", log + 'mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"\n'
-                  f'printf \'#!/bin/sh\\n[ "$2" != "import en_core_web_md" ] || exit 0\\nexec "{sys.executable}" "$@"\\n\' > '
-                  '"$UV_PROJECT_ENVIRONMENT/bin/python"\n'
+                  f'printf \'#!/bin/sh\\nexec "{sys.executable}" "$@"\\n\' > "$UV_PROJECT_ENVIRONMENT/bin/python"\n'
                   'chmod +x "$UV_PROJECT_ENVIRONMENT/bin/python"\n')
         self.stub("curl", log + "exit 7\n")       # nobody is on the bridge's port
         for name in ("launchctl", "loginctl", "pkill"):
@@ -114,7 +113,6 @@ def test_fresh_install(machine, system):
     config = (m.profile / "config.yaml").read_text()
     assert "ollama-local\n  model" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config and "__" not in config
     assert (m.profile / ".env").exists() and (m.ghost / "privacy" / "uncensored_prefill.json").exists()
-    assert not (m.ghost / "privacy" / ".scrub").exists()
 
 
 def test_a_new_install_contacts_nobody_until_you_log_in(machine):
@@ -137,7 +135,7 @@ def test_services_on_a_mac(machine):
     assert m.install().returncode == 0
     assert [p.name for p in agents.iterdir()] == ["ai.dreamfort.ghost.plist"]
     text = (agents / "ai.dreamfort.ghost.plist").read_text()
-    assert f"<string>{m.ghost}/venv/bin/python</string>" in text and f"<string>{m.ghost}/privacy/scrubbing_proxy.py</string>" in text
+    assert f"<string>{m.ghost}/venv/bin/python</string>" in text and f"<string>{m.ghost}/privacy/bridge.py</string>" in text
     calls = [c for c in m.calls() if c.startswith("launchctl")]
     domain = f"gui/{os.getuid()}"
     assert calls == [*(f"launchctl bootout {domain}/{label}" for label in OLD_AGENTS),
@@ -176,25 +174,24 @@ def test_options_are_remembered_until_switched_off(machine):
     assert [c.rpartition("=")[2] for c in builds] == ["1", "1", "yes", "yes"]
 
 
-def test_redaction_option(machine):
-    m = machine()
-    done = m.install(GHOST_SCRUB="1")
-    assert done.returncode == 0 and "Redaction is on" in done.stdout and "uv sync --python 3.11 --frozen --extra presidio" in m.calls()
-    assert (m.ghost / "privacy" / ".scrub").exists() and (m.ghost / "privacy" / ".presidio").exists()
-    assert "redact_secrets: true" in (m.profile / "config.yaml").read_text()
-    m.install(GHOST_SCRUB="0")
-    assert not (m.ghost / "privacy" / ".scrub").exists() and "redact_secrets: false" in (m.profile / "config.yaml").read_text()
-
-
-def test_an_update_does_not_switch_redaction_off(machine):
+def test_what_older_releases_left_behind_is_removed(machine):
     m = machine()
     m.install()
-    scrub = m.ghost / "privacy" / ".scrub"
-    scrub.touch()   # ghost --scrub
+    privacy = m.ghost / "privacy"
+    for name in ("scrubbing_proxy.py", "presidio_scrub.py", "scrub_patterns.py", "ensure_scrubber_route.py", ".presidio", ".pass_paths"):
+        (privacy / name).touch()
+    (privacy / "pii_denylist.txt").write_text("my terms")
+    assert "Redaction was removed" not in m.install().stdout
+    assert sorted(p.name for p in privacy.iterdir() if p.suffix == ".py") == ["bridge.py", "ghost_auth.py", "ghost_login.py", "launch.py", "spend.py"]
+    assert not (privacy / ".presidio").exists() and (privacy / "pii_denylist.txt").read_text() == "my terms"   # yours
+
+
+def test_someone_who_had_redaction_on_is_told_it_is_gone(machine):
+    m = machine()
     m.install()
-    assert scrub.exists()
-    m.install(GHOST_SCRUB="0")
-    assert not scrub.exists()
+    (m.ghost / "privacy" / ".scrub").touch()
+    assert "Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first." in m.install().stdout
+    assert "Redaction was removed" not in m.install().stdout   # once
 
 
 def test_your_edits_are_kept_beside_the_new_files(machine):

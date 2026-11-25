@@ -2,15 +2,15 @@
 #
 #   irm https://raw.githubusercontent.com/OpenGradient/ghost/main/install.ps1 | iex
 #
-# From a clone:  powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Local] [-Scrub] [-NoBrowser]
+# From a clone:  powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Local] [-NoBrowser]
 #
 # Sets up the engine (the Hermes release pinned in engine.pin, debranded, with its own runtime), the local
 # bridge that seals requests to the TEE gateway, and the `ghost` commands. It contacts no model and needs no
 # login: ghost asks you to log in the first time you run it. No administrator rights needed.
 #
-# Options: -Local (an offline model too; needs Ollama), -Scrub (redact PII and secrets from everything sent),
-# -NoBrowser (skip Chromium and the computer-use driver). `ghost update` remembers them.
-param([switch]$Local, [switch]$Scrub, [switch]$NoBrowser)
+# Options: -Local (an offline model too; needs Ollama), -NoBrowser (skip Chromium and the computer-use driver).
+# `ghost update` remembers them.
+param([switch]$Local, [switch]$NoBrowser)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -51,7 +51,7 @@ function Option($switch, $name) {
   if ($null -ne $value) { return $value -notin "", "0" }
   return $saved -match "(?m)^$name=1"
 }
-$Local = Option $Local "GHOST_LOCAL"; $Scrub = Option $Scrub "GHOST_SCRUB"; $NoBrowser = Option $NoBrowser "GHOST_NO_BROWSER"
+$Local = Option $Local "GHOST_LOCAL"; $NoBrowser = Option $NoBrowser "GHOST_NO_BROWSER"
 if ($NoBrowser) { $env:GHOST_NO_BROWSER = "1" } else { Remove-Item Env:GHOST_NO_BROWSER -ErrorAction SilentlyContinue }
 
 # --- 1. this machine -------------------------------------------------------------------------
@@ -62,7 +62,7 @@ if (-not (Have uv)) { throw "couldn't install uv. Install it from https://docs.a
 if ($Local -and -not (Have ollama)) { throw "-Local needs Ollama: install it from https://ollama.com, then run this again." }
 New-Item -ItemType Directory -Force -Path $GhostHome, $Priv, $BinDir | Out-Null
 Write-Text "$GhostHome\.src" $Repo
-$chosen = @(); if ($Local) { $chosen += "GHOST_LOCAL=1" }; if ($Scrub) { $chosen += "GHOST_SCRUB=1" }; if ($NoBrowser) { $chosen += "GHOST_NO_BROWSER=1" }
+$chosen = @(); if ($Local) { $chosen += "GHOST_LOCAL=1" }; if ($NoBrowser) { $chosen += "GHOST_NO_BROWSER=1" }
 Write-Text "$GhostHome\.install-env" (($chosen | ForEach-Object { "$_`n" }) -join "")
 
 # --- 2. the bridge ---------------------------------------------------------------------------
@@ -70,24 +70,21 @@ Say "Installing the privacy bridge"
 # Windows won't replace the files of a program that is running.
 foreach ($task in "ghost-bridge", "ghost-scrubber", "ghost-veil") { Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue | Where-Object {
-  $_.CommandLine -and ($_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
+  $_.CommandLine -and ($_.CommandLine.Contains("$Priv\bridge.py") -or $_.CommandLine.Contains("$Priv\scrubbing_proxy.py") -or $_.CommandLine.Contains("-m veil serve --foreground --skip-setup --port 11435"))
 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }   # older releases'
 
 $env:UV_PROJECT_ENVIRONMENT = $Venv
-$extra = @(); if ($Scrub) { $extra = @("--extra", "presidio") }
 Push-Location $Repo
-try { & uv sync --quiet --python 3.11 --frozen @extra; Check "uv sync" } finally { Pop-Location }
+try { & uv sync --quiet --python 3.11 --frozen; Check "uv sync" } finally { Pop-Location }
 Remove-Item Env:UV_PROJECT_ENVIRONMENT
-foreach ($old in "ensure_scrubber_route.py", ".proxy", ".no_scrub", ".pass_paths", ".presidio") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }
+if (Test-Path "$Priv\.scrub") {   # someone relied on it: say so rather than let them find out
+  Write-Host "   Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first."
+}
+foreach ($old in "scrubbing_proxy.py", "presidio_scrub.py", "scrub_patterns.py", "ensure_scrubber_route.py", ".scrub", ".no_scrub",
+                 ".full_redaction", ".presidio", ".presidio_failed", ".pass_paths", ".proxy") { Remove-Item "$Priv\$old" -ErrorAction SilentlyContinue }
 Copy-Item "$Repo\privacy\*.py" $Priv -Force
 Copy-Item "$Repo\profile\uncensored_prefill.json" $Priv -Force
-if (-not (Test-Path "$Priv\pii_denylist.txt")) { Copy-Item "$Repo\profile\pii_denylist.example.txt" "$Priv\pii_denylist.txt" }
-if ($Scrub) {
-  Write-Text "$Priv\.scrub" ""
-  & $Py -m spacy download en_core_web_md; Check "downloading the name detector"
-  Write-Text "$Priv\.presidio" ""
-} elseif ($env:GHOST_SCRUB -eq "0") { Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue }   # what `ghost --scrub` switched on stays on
 
 # --- 3. the engine ---------------------------------------------------------------------------
 Say "Building the engine (a few minutes)"
@@ -114,7 +111,7 @@ if ($Local) {
 
 # --- 5. the profile --------------------------------------------------------------------------
 Say "Writing your profile"
-$flags = @(); if ($LocalModel) { $flags += @("--local-model", $LocalModel) }; if ($Scrub) { $flags += "--scrub" }
+$flags = @(); if ($LocalModel) { $flags += @("--local-model", $LocalModel) }
 & $Py "$Repo\scripts\write_profile.py" $ProfileDir --ghost-home $GhostHome @flags; Check "writing the profile"
 & $Py "$Repo\scripts\migrate_skills.py" $GhostHome $ProfileDir; Check "moving your skills"
 
@@ -125,7 +122,7 @@ try {
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $task = @{
     TaskName  = "ghost-bridge"
-    Action    = New-ScheduledTaskAction -Execute $Pyw -Argument "-Es `"$Priv\scrubbing_proxy.py`""
+    Action    = New-ScheduledTaskAction -Execute $Pyw -Argument "-Es `"$Priv\bridge.py`""
     Trigger   = New-ScheduledTaskTrigger -AtLogOn -User $me   # for anyone's logon it would need an administrator
     Principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
     Settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 `
@@ -134,7 +131,7 @@ try {
   Register-ScheduledTask @task -Force | Out-Null
 } catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." }
 & $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())" $Priv
-if ($LASTEXITCODE -ne 0) { throw "the background service didn't start. Its log is $Priv\scrubber.log" }
+if ($LASTEXITCODE -ne 0) { throw "the background service didn't start. Its log is $Priv\bridge.log" }
 
 # --- 7. the commands -------------------------------------------------------------------------
 Say "Installing the ghost command"

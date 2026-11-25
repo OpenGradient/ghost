@@ -8,7 +8,7 @@
     <array>
         <string>__PYTHON__</string>
         <string>-Es</string>
-        <string>__GHOST_HOME__/privacy/scrubbing_proxy.py</string>
+        <string>__GHOST_HOME__/privacy/bridge.py</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
