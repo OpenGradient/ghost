@@ -65,7 +65,10 @@ jobs:
           profile="$HOME/.ghost/profiles/uncensored"; echo "# mine" | tee -a "$profile/SOUL.md" >> "$profile/config.yaml"
           "$ghost" gateway install --start-now --start-on-login
           sleep 15; "$ghost" gateway status; before="$(pid)"; kill -0 "$before"
-          GHOST_VERBOSE=1 ./install.sh
+          started=$SECONDS; ./install.sh   # nothing new: the engine isn't built again, and the gateway is left alone
+          grep -q "already this build" "$HOME/.ghost/install.log"; echo "took $((SECONDS - started))s"; test $((SECONDS - started)) -lt 30
+          test "$(pid)" = "$before"; kill -0 "$before"
+          GHOST_FORCE=1 GHOST_VERBOSE=1 ./install.sh
           sleep 15; "$ghost" gateway status; after="$(pid)"; kill -0 "$after"
           test "$before" != "$after"; if kill -0 "$before" 2>/dev/null; then exit 1; fi
           test ! -e "$HOME/.ghost/.restart-gateway"
