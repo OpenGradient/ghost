@@ -45,7 +45,7 @@ Re-run the same command, or `ghost update`, to update. From a local clone it's j
 
 **The Problem.** Frontier models refuse, moralize, and water answers down. You ask something direct, security research, something adult, something dual-use, something merely uncomfortable, and you get a disclaimer and a redirect to "safer alternatives."
 
-**The Fix.** ghost only connects **open-weight, unrestricted models** (Abliterated Large v2 by default, with its refusals removed from the weights; plus DeepSeek V4 Pro and Hermes 4 405B, steered), so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
+**The Fix.** ghost only connects **open-weight, unrestricted models** (Abliterated Large v2 by default, with its refusals removed from the weights; plus DeepSeek V4 Pro and Hermes 4 405B/70B, steered), so the default answers in full with no sermon. Closed, refusing models (Claude, GPT, Gemini, Grok) aren't offered, and the gateway rejects anything off the list. It treats you as a competent adult, but it isn't an edgelord either: it won't volunteer illegal or shock content, it just won't refuse you.
 
 ### Problem #2: The Provider Reads Everything You Send
 
@@ -78,8 +78,9 @@ Switch with `/model`, all open-weight, nothing closed or refusing:
 | Model | What it is |
 |---|---|
 | `abliteration/abliterated-model-large-v2` **(default)** | Uncensored by abliteration, with refusals removed from the weights rather than steered past. 1M context; built for authorized offensive-security, red-team and long-horizon agent work. |
-| `deepseek/deepseek-v4-pro` | Strongest open reasoning + coding model; uncensored via ghost's steer. Also summarizes long chats. |
-| `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback and ghost's auxiliary tasks. |
+| `deepseek/deepseek-v4-pro` | Strongest open reasoning + coding model; uncensored via ghost's steer. |
+| `nous/hermes-4-405b` | Flagship uncensored open model, the most steerable. Also the hosted fallback. |
+| `nous/hermes-4-70b` | Fast, low-cost; runs ghost's auxiliary tasks. |
 | local (opt-in) | Abliterated 7B / 32B via `GHOST_LOCAL`, fully offline, zero egress. |
 
 ## How the private path works

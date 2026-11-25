@@ -80,15 +80,16 @@ if (-not (Test-Path "$ProfileDir\.env")) { Copy-Item "$RepoRoot\profile\.env.exa
 & $Py "$RepoRoot\scripts\migrate_skills.py" $GhostHome $ProfileDir
 if (-not $Local) {
   # hosted-only: route auxiliary + fallback to hosted models (mirrors install.sh)
-  @'
+  $hosted = @'
 import sys, re
-p = sys.argv[1]; s = open(p, encoding="utf-8-sig").read()
-s = re.sub(r"provider: ollama-local\n(\s*)model: \S+", r"provider: opengradient\n\1model: nous/hermes-4-405b", s)
-s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local", r"model: nous/hermes-4-405b\n\1provider: opengradient", s)
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+s = re.sub(r"provider: ollama-local\n(\s*)model: \S+", r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
+s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local", r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-s = re.sub(r"(  compression:\n    provider: opengradient\n    model: )\S+", r"\g<1>deepseek/deepseek-v4-pro", s)
-open(p, "w", encoding="utf-8").write(s); print("   hosted-only: fallback + auxiliary -> hermes-4-405b, compression -> deepseek-v4-pro (via og-veil)")
-'@ | & $Py - "$ProfileDir\config.yaml"
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b", r"\g<1>nous/hermes-4-405b", s, count=1)
+open(p, "w", encoding="utf-8").write(s); print("   hosted-only: fallback -> 405b, auxiliary -> 70b (via og-veil)")
+'@
+  $hosted | & $Py - "$ProfileDir\config.yaml"   # python reads its script from stdin
 }
 # redaction markers (off by default)
 if (-not (Test-Path "$Priv\pii_denylist.txt")) { Copy-Item "$RepoRoot\profile\pii_denylist.example.txt" "$Priv\pii_denylist.txt" -Force }
@@ -181,5 +182,5 @@ if ($LASTEXITCODE -eq 0) { & "$BinDir\ghost.cmd" --yolo -z "Reply with one word:
 else { Write-Host "   skipped -- it needs a connected account (run 'ghost-login', then 'ghost')" }
 
 Say "ghost installed -- open a new terminal and run:  ghost"
-Write-Host "   Hosted default = abliteration/abliterated-model-large-v2 via the OpenGradient TEE gateway (OHTTP-private)."
+Write-Host "   Hosted default = deepseek/deepseek-v4-pro via the OpenGradient TEE gateway (OHTTP-private)."
 Write-Host "   Not connected yet? Run:  ghost-login"

@@ -18,7 +18,7 @@
 #
 # Optional config via env (all optional -- plain `./install.sh` does the full private setup):
 #   GHOST_LOCAL=1        also install Ollama + a local model for an offline / true-incognito
-#                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 405B)
+#                        fallback (DEFAULT is hosted-only -- no Ollama, fallback is hosted 70B)
 #   GHOST_LOCAL_32B=1    pull the stronger 32B local model too (26GB; implies GHOST_LOCAL)
 #   GHOST_SCRUB=1        opt in to OUTBOUND PII + secret redaction (OFF by default -- ghost is a
 #                        full-fidelity agent; og-veil's OHTTP+TEE provides the privacy regardless)
@@ -56,7 +56,7 @@ ENG="${GHOST_ENGINE:-$HOME/.ghost-engine}"
 PYTHON="${GHOST_PYTHON:-}"   # resolved to an isolated uv venv (Python 3.11) in the Dependencies step
 SCRUBBER="http://127.0.0.1:8788"
 # Local models (Ollama) are OPT-IN. Default = hosted-only: no Ollama, and the fallback +
-# auxiliary tasks route to hosted models (nous/hermes-4-405b) over the same private og-veil
+# auxiliary tasks route to a hosted model (nous/hermes-4-70b) over the same private og-veil
 # path. Set GHOST_LOCAL=1 to also install Ollama + a local model for an offline / incognito
 # fallback. GHOST_LOCAL_32B implies GHOST_LOCAL. (GHOST_NO_LOCAL is still accepted as a no-op
 # since hosted-only is now the default.)
@@ -156,14 +156,14 @@ import sys, re
 p = sys.argv[1]; s = open(p).read()
 # Handle both key orders (provider-then-model and model-then-provider in the auxiliary blocks).
 s = re.sub(r"provider: ollama-local\n(\s*)model: \S+",
-           r"provider: opengradient\n\1model: nous/hermes-4-405b", s)
+           r"provider: opengradient\n\1model: nous/hermes-4-70b", s)
 s = re.sub(r"model: ghost-tool:latest\n(\s*)provider: ollama-local",
-           r"model: nous/hermes-4-405b\n\1provider: opengradient", s)
+           r"model: nous/hermes-4-70b\n\1provider: opengradient", s)
 s = s.replace("provider: ollama-local", "provider: opengradient")
-# Compression reads the whole chat, so it needs a window as large as the chat model's: with a smaller
-# one the engine shrinks the chat's window to match.
-s = re.sub(r"(  compression:\n    provider: opengradient\n    model: )\S+", r"\g<1>deepseek/deepseek-v4-pro", s)
-open(p, "w").write(s); print("   hosted-only: fallback + auxiliary -> nous/hermes-4-405b, compression -> deepseek/deepseek-v4-pro (via og-veil)")
+# Chat fallback -> the stronger 405B (aux tasks stay on 70B for speed/cost).
+s = re.sub(r"(fallback_model:\n  provider: opengradient\n  model: )nous/hermes-4-70b",
+           r"\g<1>nous/hermes-4-405b", s, count=1)
+open(p, "w").write(s); print("   hosted-only: fallback -> nous/hermes-4-405b, auxiliary -> nous/hermes-4-70b (via og-veil)")
 PYEOF
 fi
 
@@ -280,7 +280,7 @@ fi
 
 say "ghost installed -- run:  ghost"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   (add ~/.local/bin to your PATH first)";; esac
-echo "   Hosted default = $(awk '/^model:/{f=1;next} f&&/^  default:/{print $2;exit}' "$PROFILE/config.yaml") via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
+echo "   Hosted default = deepseek/deepseek-v4-pro via og-veil -> the OpenGradient TEE gateway (OHTTP-private)."
 echo "   Inside ghost, /model switches between hosted models and the local model (true incognito)."
 echo "   Redaction is OFF by default (full fidelity). Opt in with GHOST_SCRUB=1 (or 'ghost --scrub'), then personalize $PRIV/pii_denylist.txt."
 echo "   Not connected yet? Run:  ghost-login"
