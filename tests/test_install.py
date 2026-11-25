@@ -186,6 +186,17 @@ def test_redaction_option(machine):
     assert not (m.ghost / "privacy" / ".scrub").exists() and "redact_secrets: false" in (m.profile / "config.yaml").read_text()
 
 
+def test_an_update_does_not_switch_redaction_off(machine):
+    m = machine()
+    m.install()
+    scrub = m.ghost / "privacy" / ".scrub"
+    scrub.touch()   # ghost --scrub
+    m.install()
+    assert scrub.exists()
+    m.install(GHOST_SCRUB="0")
+    assert not scrub.exists()
+
+
 def test_your_edits_are_kept_beside_the_new_files(machine):
     m = machine()
     m.install()

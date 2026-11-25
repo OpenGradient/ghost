@@ -67,6 +67,7 @@ main() {
 # ── options ───────────────────────────────────────────────────────────────────
 options() {
   local name
+  SCRUB_OFF=""; [ "${GHOST_SCRUB-}" != 0 ] || SCRUB_OFF=1   # asked for now, rather than never asked for
   for name in GHOST_LOCAL GHOST_LOCAL_32B GHOST_SCRUB GHOST_NO_BROWSER; do
     local value="${!name-$(sed -n "s/^$name=//p" "$GHOST_HOME/.install-env" 2>/dev/null | tail -1)}"
     case "$value" in ""|0) value="" ;; *) value=1 ;; esac
@@ -192,7 +193,8 @@ install_bridge() {
   cp "$REPO"/privacy/*.py "$PRIV/"
   cp "$REPO/profile/uncensored_prefill.json" "$PRIV/"
   [ -f "$PRIV/pii_denylist.txt" ] || cp "$REPO/profile/pii_denylist.example.txt" "$PRIV/pii_denylist.txt"
-  if [ -z "$GHOST_SCRUB" ]; then rm -f "$PRIV/.scrub"; return; fi
+  [ -z "$SCRUB_OFF" ] || rm -f "$PRIV/.scrub"
+  [ -n "$GHOST_SCRUB" ] || return 0   # (what `ghost --scrub` switched on stays on)
   : > "$PRIV/.scrub"
   "$PYTHON" -c "import en_core_web_md" 2>/dev/null || "$PYTHON" -m spacy download en_core_web_md
   : > "$PRIV/.presidio"

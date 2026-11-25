@@ -87,7 +87,7 @@ if ($Scrub) {
   Write-Text "$Priv\.scrub" ""
   & $Py -m spacy download en_core_web_md; Check "downloading the name detector"
   Write-Text "$Priv\.presidio" ""
-} else { Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue }
+} elseif ($env:GHOST_SCRUB -eq "0") { Remove-Item "$Priv\.scrub" -ErrorAction SilentlyContinue }   # what `ghost --scrub` switched on stays on
 
 # --- 3. the engine ---------------------------------------------------------------------------
 Say "Building the engine (a few minutes)"
