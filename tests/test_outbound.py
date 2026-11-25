@@ -71,11 +71,20 @@ def test_the_bridge_reads_the_registry_that_way(monkeypatch):
     monkeypatch.setattr(bridge, "_clients", {})
     monkeypatch.setattr(bridge.ghost_auth, "credentials", lambda: ("https://relay.example/x", "t"))
     monkeypatch.setattr(bridge.outbound, "transport", lambda url, **options: (url, options))
-    monkeypatch.setattr(bridge, "OHTTPTransport", lambda **options: made.update(options) or httpx.MockTransport(lambda r: None))
+    sealing = httpx.MockTransport(lambda request: None)
+    monkeypatch.setattr(bridge, "OHTTPTransport", lambda **options: made.update(options) or sealing)
     bridge._upstream()
-    assert made["transport"] == ("https://relay.example/x", {}) and made["registry_transport"][1] == {"public_only": True}
-    from opengradient_ohttp._registry import DEFAULT_RPC_URL
-    assert made["registry_transport"][0] == DEFAULT_RPC_URL and "registry_rpc_url" not in made
+    from opengradient_ohttp import DEFAULT_RPC_URL
+    assert made["transport"] == ("https://relay.example/x", {})
+    assert sealing._resolver._transport == (DEFAULT_RPC_URL, {"public_only": True}) and sealing._resolver._rpc_url == DEFAULT_RPC_URL
+
+
+def test_the_sealing_takes_its_enclaves_from_there():
+    """ghost sets this attribute of opengradient-ohttp's transport; a release that moves it must not go unnoticed."""
+    pytest.importorskip("opengradient_ohttp")
+    from opengradient_ohttp import OHTTPTransport
+    from opengradient_ohttp._registry import TeeResolver
+    assert type(OHTTPTransport()._resolver) is TeeResolver
 
 
 def test_an_engine_reaches_the_bridge_without_the_proxy(monkeypatch):

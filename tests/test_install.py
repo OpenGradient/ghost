@@ -182,7 +182,7 @@ def test_what_older_releases_left_behind_is_removed(machine):
         (privacy / name).touch()
     (privacy / "pii_denylist.txt").write_text("my terms")
     assert "Redaction was removed" not in m.install().stdout
-    assert sorted(p.name for p in privacy.iterdir() if p.suffix == ".py") == ["bridge.py", "doctor.py", "ghost_auth.py", "ghost_login.py", "launch.py", "localhttp.py", "outbound.py", "spend.py"]
+    assert sorted(p.name for p in privacy.iterdir() if p.suffix == ".py") == ["bridge.py", "doctor.py", "enclaves.py", "ghost_auth.py", "ghost_login.py", "launch.py", "localhttp.py", "outbound.py", "spend.py"]
     assert not (privacy / ".presidio").exists() and (privacy / "pii_denylist.txt").read_text() == "my terms"   # yours
 
 

@@ -71,7 +71,7 @@ On Windows, from a clone: `.\install.ps1 -Local -NoBrowser`.
 
 An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
 
-**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io` and `ogevmdevnet.opengradient.ai`. If the network inspects TLS, the second one has to be exempt: that's where ghost reads which enclaves to trust, and it won't take that from an intercepted connection.
+**On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection, and falls back to an enclave built into the release.
 
 </details>
 
@@ -143,7 +143,7 @@ The model's host is NEAR AI for DeepSeek V4.1 Flash Abliterated (served from TEE
 
 ## Honest limits
 
-- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`. A reply is never paid for twice: what comes back unusable is reported, not retried.
+- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`. What comes back unusable is reported, not paid for again: at most one retry, when the connection broke.
 - **Replies arrive whole.** The signature covers the complete reply, so ghost shows it once it's verified rather than word by word.
 - **The local model is opt-in and weaker.** Off by default (`GHOST_LOCAL`); it's a weaker agentic searcher and may still lean on the hosted gateway for tool orchestration.
 - **The engine is forked, not rewritten.** It's one pinned Hermes release ([`engine.pin`](engine.pin)), patched and self-contained: no separate Hermes install is needed or touched, and `ghost update` is what moves it. Internal package names stay `hermes_cli`.
