@@ -244,6 +244,11 @@ sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GH
 sed -e "s#__HOME__#$HOME#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" "$REPO/bin/ghost-update" > "$HOME/.local/bin/ghost-update"
 chmod +x "$HOME/.local/bin/ghost" "$HOME/.local/bin/ghost-login" "$HOME/.local/bin/ghost-update"
 
+# ghost-login --device's helper: an internal tool, so it lives in GHOST_HOME,
+# not on PATH. Run by ghost-login with the venv python.
+mkdir -p "$GHOST_HOME/lib"
+cp "$REPO/bin/ghost-device-login.py" "$GHOST_HOME/lib/ghost-device-login.py"
+
 # ---------- 6. connect your account (hosted models) ----------
 say "Connect your OpenGradient Chat account (for hosted models)"
 GL="$HOME/.local/bin/ghost-login"   # thin wrapper over `og-veil login` (installed above)

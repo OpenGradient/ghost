@@ -33,6 +33,8 @@ ghost-login     # connect your account once (browser login)
 ghost           # start chatting (default: Abliterated Large v2, private via the TEE gateway)
 ```
 
+On a machine the browser can't call back to (SSH, a container), `ghost-login --device` is the easy path: it shows a short code, you type it into the website while signed in, and you're in -- no token JSON, no pasting.
+
 Re-run the same command, or `ghost update`, to update. From a local clone it's just `./install.sh`. Want the offline local model too? `GHOST_LOCAL=1 ...`.
 
 ## Why ghost exists

@@ -7,12 +7,17 @@
 #
 #   ghost-login            browser login: opens the website, hands a session token
 #                          back to this machine, and stores it for og-veil to use.
+#   ghost-login --device   device login: shows a short code; type it into the
+#                          website while signed in and you're logged in. The
+#                          easiest path when the browser can't call back to
+#                          this machine (SSH, containers).
 #   ghost-login --status   show whether you're connected (and as whom).
 #   ghost-login --logout   forget the stored session.
 #   ghost-login --paste    paste the token JSON manually (headless / no browser).
 #
 # Override the website with GHOST_CHAT_APP_URL (default https://chat.opengradient.ai).
 PY=__PYTHON__
+GHOST_HOME=__GHOST_HOME__
 # og-veil reads the chat-app origin from OG_VEIL_APP_URL.
 export OG_VEIL_APP_URL="${GHOST_CHAT_APP_URL:-https://chat.opengradient.ai}"
 
@@ -20,6 +25,7 @@ case "${1:-}" in
   --status) exec "$PY" -m veil status ;;
   --logout) exec "$PY" -m veil logout ;;
   --paste)  exec "$PY" -m veil login --manual ;;
+  --device) exec "$PY" "$GHOST_HOME/lib/ghost-device-login.py" ;;
   "")       exec "$PY" -m veil login ;;
   *)        exec "$PY" -m veil login "$@" ;;
 esac
