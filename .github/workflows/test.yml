@@ -73,9 +73,9 @@ jobs:
           sleep 15; "$ghost" gateway status; before="$(pid)"; kill -0 "$before"
           GHOST_VERBOSE=1 ./install.sh
           sleep 15; "$ghost" gateway status; after="$(pid)"; kill -0 "$after"
-          test "$before" != "$after" && ! kill -0 "$before" 2>/dev/null
+          test "$before" != "$after"; if kill -0 "$before" 2>/dev/null; then exit 1; fi
           test ! -e "$HOME/.ghost/.restart-gateway"
-          for f in SOUL.md config.yaml; do grep -q "# mine" "$profile/$f.prev"; ! grep -q "# mine" "$profile/$f"; done
+          for f in SOUL.md config.yaml; do grep -q "# mine" "$profile/$f.prev"; if grep -q "# mine" "$profile/$f"; then exit 1; fi; done
           curl -fs http://127.0.0.1:8788/healthz
       - name: Check the engine
         shell: bash
@@ -88,8 +88,9 @@ jobs:
           case "$RUNNER_OS" in Windows) cmd //c "$(cygpath -w "$HOME/.local/bin/ghost.cmd")" uninstall --yes ;; *) "$HOME/.local/bin/ghost" uninstall --yes ;; esac
           sleep 3
           test ! -e "$HOME/.ghost-engine"; test ! -e "$HOME/.ghost/venv"; test -e "$HOME/.ghost/profiles/uncensored/config.yaml"
-          ls "$HOME/.local/bin" | tee left; ! grep -q "^ghost" left
-          ! curl -fs --max-time 3 http://127.0.0.1:8788/healthz
+          ls "$HOME/.local/bin" | tee left
+          if grep -q "^ghost" left; then exit 1; fi
+          if curl -fs --max-time 3 http://127.0.0.1:8788/healthz; then exit 1; fi
 
   # A bare machine: no Python, no service manager, and the one-line command rather than a checkout.
   bare:
@@ -102,6 +103,8 @@ jobs:
     steps:
       - run: apt-get update -qq && apt-get install -qqy curl git ca-certificates >/dev/null
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install, use and remove it
         run: |
           export HOME=/root

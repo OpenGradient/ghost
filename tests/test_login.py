@@ -77,7 +77,7 @@ class DreamFort:
         return {"type": "opengradient-cli-auth", "version": 1, "access_token": "token", "refresh_token": "refresh",
                 "expires_at": int(time.time()) + 3600, "user": {"email": "mara@example.com"},
                 "config": {"supabase_url": self.url, "supabase_anon_key": "anon", "chat_api_base_url": self.url,
-                           "tee_registry_rpc_url": "https://rpc", "tee_registry_address": "0xabc"}, **extra}
+                           "tee_registry_rpc_url": "https://rpc"}, **extra}
 
 
 @pytest.fixture
@@ -169,9 +169,15 @@ def test_only_a_dreamfort_login_is_stored(dream, wrong):
 
 def test_an_account_is_sent_to_the_consumer_relay(dream):
     ghost_auth.save_account(dream.bundle())
-    assert ghost_auth.credentials() == (dream.url + "/api/v1/chat/ohttp", "token",
-                                        {"registry_rpc_url": "https://rpc", "registry_address": "0xabc"})
+    assert ghost_auth.credentials() == (dream.url + "/api/v1/chat/ohttp", "token")
     assert dream.seen == []   # a token that is still good is not renewed
+
+
+def test_a_login_cannot_choose_the_relay_or_the_enclaves(dream):
+    """Whoever approves a code decides what's in the login. At most that should be an account."""
+    ghost_auth.save_account(dream.bundle(config={"supabase_url": dream.url, "chat_api_base_url": "https://evil.example",
+                                                 "tee_registry_rpc_url": "https://evil.example", "tee_registry_address": "0xevil"}))
+    assert ghost_auth.credentials() == (dream.url + "/api/v1/chat/ohttp", "token")
 
 
 def test_an_expired_token_is_renewed_once(dream):
@@ -199,7 +205,7 @@ def test_a_renewal_another_process_made_is_used(dream, monkeypatch):
 
 
 def test_no_connection_is_not_an_expired_login(dream):
-    ghost_auth.save_account(dream.bundle(expires_at=1, config={"supabase_url": "http://127.0.0.1:9", "chat_api_base_url": dream.url}))
+    ghost_auth.save_account(dream.bundle(expires_at=1, config={"supabase_url": "http://127.0.0.1:9"}))
     with pytest.raises(ghost_auth.AuthError, match="couldn't reach DreamFort"):
         ghost_auth.credentials()
 
@@ -221,7 +227,7 @@ def test_api_key_from_stdin(dream, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Logged in with your DreamFort API key (df_sk_…1234)" in out and GOOD_KEY not in out
     assert private(ghost_auth.KEY_FILE)
-    assert ghost_auth.credentials() == (dream.url + "/api/v1/developer/ohttp", GOOD_KEY, {})
+    assert ghost_auth.credentials() == (dream.url + "/api/v1/developer/ohttp", GOOD_KEY)
 
 
 @pytest.mark.parametrize("key, words", [(BAD_KEY, "doesn't accept that key"), ("sk-other", "start with df_sk_"), ("", "start with df_sk_")])
@@ -261,6 +267,12 @@ def test_status_and_logout_contact_nobody(dream, capsys):
 def test_a_script_is_told_what_to_do(dream, capsys):
     assert ghost_login.main([]) == 1
     assert "--with-api-key" in capsys.readouterr().err and dream.seen == []
+
+
+def test_output_survives_an_ascii_locale(dream, tmp_path):
+    env = {**os.environ, "GHOST_HOME": str(tmp_path), "OG_VEIL_HOME": str(tmp_path / "v"), "GHOST_CHAT_API_URL": dream.url, "PYTHONIOENCODING": "ascii"}
+    done = subprocess.run([sys.executable, str(PRIVACY / "ghost_login.py"), "--with-api-key"], input=BAD_KEY.encode(), env=env, capture_output=True, timeout=30)
+    assert done.returncode == 1 and "✗ DreamFort doesn't accept that key" in done.stdout.decode("utf-8") and done.stderr == b""
 
 
 # ── in a terminal ─────────────────────────────────────────────────────────────

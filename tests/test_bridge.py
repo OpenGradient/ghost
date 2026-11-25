@@ -201,7 +201,7 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     seen = []
 
     class Transport(httpx.BaseTransport):
-        def __init__(self, relay_url, verify_before_release, **options):
+        def __init__(self, relay_url, verify_before_release, timeout):   # and no registry: the library's own is used
             assert verify_before_release is True
             self.relay = relay_url
 
@@ -211,7 +211,7 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     monkeypatch.setattr(sp, "_upstream", REAL_UPSTREAM)
     monkeypatch.setattr(sp, "OHTTPTransport", Transport)
     monkeypatch.setattr(sp, "_clients", {})
-    monkeypatch.setattr(sp.ghost_auth, "credentials", lambda: (relay, token, {}))
+    monkeypatch.setattr(sp.ghost_auth, "credentials", lambda: (relay, token))
     monkeypatch.setattr(sp.ghost_auth, "api_key", lambda: token if login["mode"] == "api_key" else None)
     status, message = bridge()
     assert (status, seen) == (402, [(relay, f"Bearer {token}")]) and words in message

@@ -5,6 +5,9 @@
   api key   a `df_sk_` developer key in ~/.ghost/privacy/dreamfort_api_key, billed by usage.
 
 Both files are 0600. An API key wins while both are present; logging in with an account removes it.
+
+A login says who you are, never where your requests go or which enclaves to trust: those are fixed here and
+in opengradient-ohttp, so a login you were tricked into accepting can't point ghost at an impostor.
 """
 import json
 import os
@@ -84,7 +87,7 @@ def save_account(bundle):
     if not isinstance(bundle, dict) or bundle.get("type") != BUNDLE_TYPE:
         raise AuthError("that isn't a DreamFort login")
     config = bundle.get("config")
-    if not bundle.get("access_token") or not isinstance(config, dict) or not config.get("chat_api_base_url"):
+    if not bundle.get("access_token") or not isinstance(config, dict) or not config.get("supabase_url"):
         raise AuthError("that login is incomplete")
     _write_private(SESSION_FILE, json.dumps(bundle, indent=2))
 
@@ -145,22 +148,18 @@ def label():
 
 
 def credentials():
-    """(relay url, bearer token, TEE registry options) for the login in use. Renews an account's token when
-    it is due. Raises AuthError when there is nothing to use."""
+    """(relay url, bearer token) for the login in use. Renews an account's token when it is due. Raises
+    AuthError when there is nothing to use."""
     key = api_key()
     if key:
-        return CHAT_API_URL + API_KEY_RELAY, key, {}
+        return CHAT_API_URL + API_KEY_RELAY, key
     with _lock:
         session = account()
         if session is None:
             raise AuthError(NOT_LOGGED_IN)
         if _expired(session):
             session = _refresh(session)
-    config = session.get("config") or {}
-    registry = {}
-    if config.get("tee_registry_rpc_url") and config.get("tee_registry_address"):
-        registry = {"registry_rpc_url": config["tee_registry_rpc_url"], "registry_address": config["tee_registry_address"]}
-    return (config.get("chat_api_base_url") or CHAT_API_URL).rstrip("/") + ACCOUNT_RELAY, session["access_token"], registry
+    return CHAT_API_URL + ACCOUNT_RELAY, session["access_token"]
 
 
 def forget_api_key():

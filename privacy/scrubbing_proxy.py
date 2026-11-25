@@ -369,13 +369,12 @@ class Refused(Exception):
 
 def _upstream():
     """(client, headers) for the login in use. Raises AuthError when nobody is logged in."""
-    relay, token, registry = ghost_auth.credentials()
-    key = (relay, *registry.values())
+    relay, token = ghost_auth.credentials()
     with _lock:
-        if key not in _clients:
-            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT, **registry)
-            _clients[key] = httpx.Client(transport=transport, timeout=TIMEOUT)
-        return _clients[key], {"Authorization": f"Bearer {token}"}
+        if relay not in _clients:
+            transport = OHTTPTransport(relay_url=relay, verify_before_release=True, timeout=TIMEOUT)
+            _clients[relay] = httpx.Client(transport=transport, timeout=TIMEOUT)
+        return _clients[relay], {"Authorization": f"Bearer {token}"}
 
 
 def _backoff(attempt):

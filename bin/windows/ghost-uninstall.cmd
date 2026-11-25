@@ -1,3 +1,3 @@
 @echo off
-rem The uninstall removes this file while it runs, so everything is on one line, which cmd has already read.
-powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0ghost-uninstall.ps1" %* & exit /b
+rem The uninstall removes this file, so leave it first: (goto) ends the batch, and the rest of the line still runs.
+(goto) 2>nul & powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0ghost-uninstall.ps1" %*

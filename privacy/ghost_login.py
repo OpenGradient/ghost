@@ -476,6 +476,9 @@ def interactive(local_model):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):   # a Windows pipe or an ASCII locale can't take a ✓ otherwise
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="ghost-login", description="Connect ghost to DreamFort.")
     how = parser.add_mutually_exclusive_group()
     for flag, text in (("account", "log in with your DreamFort account"), ("api-key", "log in with a DreamFort API key"),
