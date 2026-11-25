@@ -106,6 +106,12 @@ class DreamFort:
                 after.append(content)
         return text, after
 
+    @staticmethod
+    def names(inner):
+        """Does the harness's own prompt say whose machine this is?"""
+        home = os.path.expanduser("~")
+        return any(home in str(m.get("content")) or home.replace("\\", "/") in str(m.get("content")) for m in inner["messages"] if m["role"] == "system")
+
     def failure(self, text):
         found = re.search(r"\[\[fail (\w+) ?(\d*)\]\]", text)
         if not found:
@@ -190,7 +196,7 @@ def handler(service):
             if billed:
                 service.billed.append(inner)
             service.note(accepted=inner["model"], billed=billed, kind=kind, max_tokens=inner.get("max_tokens"), effort=inner.get("reasoning_effort"),
-                         tools=len(inner.get("tools") or []), asked=service.asked(inner)[0][:80])
+                         tools=len(inner.get("tools") or []), asked=service.asked(inner)[0][:80], named=service.names(inner))
             if kind == "504":
                 return self.send(*refused, "text/html")
             self.close_connection = True

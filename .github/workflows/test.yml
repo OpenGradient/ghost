@@ -56,9 +56,16 @@ jobs:
           if ghost ghost-login --status; then exit 1; fi
           if echo df_sk_not_a_real_key | ghost ghost-login --with-api-key; then exit 1; fi
           ghost ghost usage
-          code=$(curl -s -o reply -w '%{http_code}' http://127.0.0.1:8788/v1/chat/completions -H 'content-type: application/json' \
-            -d '{"model": "abliteration/abliterated-model-large-v2", "messages": [{"role": "user", "content": "hi"}]}')
-          cat reply; test "$code" = 401
+          token=$(sed -n 's/^    api_key: \([0-9a-f]\{40\}\).*$/\1/p' "$HOME/.ghost/profiles/uncensored/config.yaml"); test -n "$token"
+          post() { curl -s -o reply -w '%{http_code}' http://127.0.0.1:8788/v1/chat/completions -H 'content-type: application/json' "$@" \
+            -d '{"model": "abliteration/abliterated-model-large-v2", "messages": [{"role": "user", "content": "hi"}]}'; }
+          test "$(post)" = 403   # the bridge answers this ghost only
+          test "$(post -H "Authorization: Bearer $token")" = 401; cat reply
+      - name: Log in and use it, against a stand-in for DreamFort
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in Windows) py="$HOME/.ghost/venv/Scripts/python.exe" ;; *) py="$HOME/.ghost/venv/bin/python" ;; esac
+          "$py" tests/e2e.py
       - name: Update over it, with the background gateway running
         if: runner.os != 'Windows'
         run: |
