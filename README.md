@@ -67,7 +67,7 @@ Set these as environment variables on the install command (`curl ... | GHOST_LOC
 | `GHOST_NO_BROWSER=1` | Skip Chromium and the computer-use driver: a smaller (1 GB), faster install. |
 | `GHOST_VERBOSE=1` | Show everything the installer runs. Otherwise it's in `~/.ghost/install.log`. |
 
-On Windows, from a clone: `.\install.ps1 -Local -NoBrowser`.
+On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Local -NoBrowser`.
 
 An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
 

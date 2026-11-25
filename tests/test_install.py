@@ -58,7 +58,7 @@ class Machine:
             directory.mkdir()
         for name in ("bin", "launchd", "systemd", "privacy", "profile", "scripts"):
             shutil.copytree(REPO / name, self.repo / name, ignore=shutil.ignore_patterns("__pycache__"))
-        for name in ("install.sh", "engine.pin", "models.txt"):
+        for name in ("install.sh", "engine.pin", "models.txt", "uv.lock"):
             shutil.copy(REPO / name, self.repo / name)
         (self.repo / "scripts" / "fork-engine.sh").write_text(FORK_ENGINE)
         launch = self.repo / "privacy" / "launch.py"
@@ -161,7 +161,8 @@ def test_services_on_a_mac(machine):
     domain = f"gui/{os.getuid()}"
     assert calls == [*(f"launchctl bootout {domain}/{label}" for label in OLD_AGENTS),
                      f"launchctl bootstrap {domain} {agents}/ai.dreamfort.ghost.plist"]
-    m.install()   # again: the running one is replaced
+    (m.ghost / "privacy" / ".made").unlink()
+    m.install()   # something new: the running one is replaced
     assert [c for c in m.calls() if c.startswith("launchctl")][3:] == [f"launchctl bootout {domain}/ai.dreamfort.ghost", calls[-1]]
 
 
@@ -333,11 +334,29 @@ def test_two_installs_at_once(machine):
     m = machine()
     lock = m.ghost / ".installing"
     lock.mkdir(parents=True)
-    (lock / "pid").write_text(str(os.getpid()))   # someone who is still there
-    done = m.install()
-    assert done.returncode == 1 and "already being installed or updated" in done.stderr and not m.engine.exists()
-    (lock / "pid").write_text("999999")           # and someone who isn't
-    assert m.install().returncode == 0 and not lock.exists()
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "/x/.ghost-src/install.sh"])
+    try:
+        (lock / "pid").write_text(str(other.pid))   # someone who is still at it
+        done = m.install()
+        assert done.returncode == 1 and "already being installed or updated" in done.stderr and not m.engine.exists()
+    finally:
+        other.kill()
+        other.wait()
+    for gone in (other.pid, 1):                     # and someone who isn't, or whose number someone else has now
+        (lock / "pid").write_text(str(gone))
+        assert m.install().returncode == 0 and not lock.exists()
+        lock.mkdir()
+
+
+def test_an_update_with_nothing_new_leaves_the_bridge_alone(machine):
+    """A background task may be in the middle of a reply, which is billed all the same."""
+    m = machine("Darwin")
+    m.install()
+    (m.home / "calls").unlink()
+    assert m.install().returncode == 0 and not any(c.startswith("launchctl") for c in m.calls())
+    bridge = m.repo / "privacy" / "bridge.py"
+    bridge.write_text(bridge.read_text(encoding="utf-8") + "# newer\n", encoding="utf-8")
+    assert m.install().returncode == 0 and any(c.startswith("launchctl bootstrap") for c in m.calls())
 
 
 def test_nobody_else_can_look_into_it(machine):

@@ -471,6 +471,8 @@ def _check():
         with httpx.Client(transport=outbound.transport(relay), timeout=20) as client:
             resp = client.get(f"{relay}/config", headers={"Authorization": f"Bearer {token}"})
             found["relay"] = resp.status_code
+    except ghost_auth.Unavailable as e:
+        found["unreachable"] = str(e)
     except AuthError as e:
         found["login"] = str(e)
     except httpx.HTTPError as e:
