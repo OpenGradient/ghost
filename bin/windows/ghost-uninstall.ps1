@@ -21,6 +21,13 @@ function Test-OurEngine($dir) {
 }
 if (-not ((Test-Path "$GhostHome\.src") -and (Test-Path "$GhostHome\privacy"))) { Write-Host "ghost isn't installed here ($GhostHome)."; exit 0 }
 
+$open = @(Get-CimInstance Win32_Process | Where-Object {
+  $_.ProcessId -ne $PID -and $_.CommandLine -and $_.Name -match '^(python|hermes)' -and $_.CommandLine -notmatch 'gateway run' -and
+  ($_.CommandLine.Contains("$Eng\") -or $_.CommandLine.Contains($Eng.Replace('\', '\\'))) })
+if ($open.Count -and -not $env:GHOST_FORCE) {
+  Write-Host "ghost is open (pid $($open.ProcessId -join ', ')). Close those windows and run this again."; exit 1
+}
+
 Write-Host "This removes ghost: its engine ($Eng), background service and commands."
 if (-not ($y -or $Flags -contains "--yes")) {
   if ((Read-Host "Remove ghost? [y/N]") -notmatch '^[Yy]') { Write-Host "Nothing was changed."; exit 0 }
@@ -59,10 +66,16 @@ if ($purge) {
   Remove-Item -Recurse -Force $GhostHome
   Write-Host "ghost and all of its data are gone."
 } else {
-  foreach ($name in "venv", "tools", "installs", "cache", "privacy", ".src", ".install-env") { Remove-Item -Recurse -Force "$GhostHome\$name" }
-  Write-Host "ghost is gone. Your chats, skills and settings are still in $GhostHome (delete it to remove them too)."
+  foreach ($name in "venv", "tools", "installs", "cache", "python", "uv", "privacy\__pycache__", "privacy\*.py", "privacy\uncensored_prefill.json",
+                    "privacy\bridge.key", "privacy\bridge.log*", ".src", ".install-env", ".installing") { Remove-Item -Recurse -Force "$GhostHome\$name" }
+  Write-Host "ghost is gone. Your chats, skills, settings and login are still in $GhostHome (delete it to remove them too)."
 }
 foreach ($name in "ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1", "ghost-uninstall.cmd", "ghost-uninstall.ps1") {
   Remove-Item -Force "$BinDir\$name"
+}
+if (-not (Get-ChildItem -Force $BinDir)) {   # nothing else of yours in there
+  Remove-Item -Force $BinDir
+  $path = [Environment]::GetEnvironmentVariable("Path", "User")
+  [Environment]::SetEnvironmentVariable("Path", (($path -split ";" | Where-Object { $_ -and $_ -ne $BinDir }) -join ";"), "User")
 }
 exit 0

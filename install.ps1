@@ -26,6 +26,10 @@ function Have($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 function Write-Text($path, $text) { [IO.File]::WriteAllText($path, $text) }   # no byte-order mark, unlike Set-Content
 function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" } }
 
+# (what the machine is, not this PowerShell)
+$arch = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
+if ($arch -eq "ARM64") { throw "ghost doesn't run on Windows on ARM yet. It does in WSL2 there (https://learn.microsoft.com/windows/wsl/install): use the Linux command." }
+
 # Run as `irm | iex` there is no checkout: get one, and carry on from there.
 $Repo = if ($PSScriptRoot) { $PSScriptRoot } else { "" }
 if (-not $Repo -or -not (Test-Path "$Repo\profile\config.yaml")) {
@@ -56,11 +60,28 @@ if ($NoBrowser) { $env:GHOST_NO_BROWSER = "1" } else { Remove-Item Env:GHOST_NO_
 
 # --- 1. this machine -------------------------------------------------------------------------
 Say "Checking this machine"
+New-Item -ItemType Directory -Force -Path $GhostHome | Out-Null
+try { $lock = [IO.File]::Open("$GhostHome\.installing", "OpenOrCreate", "ReadWrite", "None") }
+catch { throw "ghost is already being installed or updated. Wait for that to finish." }
+trap { $lock.Dispose(); break }
 & "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Check   # nothing changes under an open ghost
-if (-not (Have uv)) { Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression; $env:Path = "$BinDir;$env:Path" }
-if (-not (Have uv)) { throw "couldn't install uv. Install it from https://docs.astral.sh/uv/, then run this again." }
+# What ghost brings stays in its own folder: uv, the Pythons it fetches, and their cache. uv is ours, because one you
+# have may be too old; it trusts the certificates the system trusts, as a company network may have one of its own.
+$env:UV_CACHE_DIR = "$GhostHome\cache\uv"; $env:UV_PYTHON_INSTALL_DIR = "$GhostHome\python"
+$env:UV_SYSTEM_CERTS = "1"; $env:UV_NATIVE_TLS = "1"
+foreach ($v in "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+$UvVersion = "0.13.10"; $Uv = "$GhostHome\uv\uv.exe"
+if (-not ((Test-Path $Uv) -and "$(& $Uv --version)".StartsWith("uv $UvVersion"))) {
+  $env:UV_UNMANAGED_INSTALL = "$GhostHome\uv"
+  try { Invoke-RestMethod "https://astral.sh/uv/$UvVersion/install.ps1" | Invoke-Expression } catch { Write-Host "   $_" }
+  Remove-Item Env:UV_UNMANAGED_INSTALL
+  if (-not (Test-Path $Uv)) {
+    if (-not (Have uv)) { throw "couldn't download uv, which brings ghost's Python (from astral.sh and github.com). Check your connection, then run this again." }
+    $Uv = "uv"
+  }
+}
 if ($Local -and -not (Have ollama)) { throw "-Local needs Ollama: install it from https://ollama.com, then run this again." }
-New-Item -ItemType Directory -Force -Path $GhostHome, $Priv, $BinDir | Out-Null
+New-Item -ItemType Directory -Force -Path $Priv, $BinDir | Out-Null
 Write-Text "$GhostHome\.src" $Repo
 $chosen = @(); if ($Local) { $chosen += "GHOST_LOCAL=1" }; if ($NoBrowser) { $chosen += "GHOST_NO_BROWSER=1" }
 Write-Text "$GhostHome\.install-env" (($chosen | ForEach-Object { "$_`n" }) -join "")
@@ -77,11 +98,7 @@ foreach ($task in "ghost-scrubber", "ghost-veil") { Unregister-ScheduledTask -Ta
 $env:UV_PROJECT_ENVIRONMENT = $Venv
 Push-Location $Repo
 try {
-  & uv sync --quiet --python 3.11 --frozen
-  if ($LASTEXITCODE -ne 0) {   # again with the system's certificates, for a network that has one of its own
-    $env:UV_SYSTEM_CERTS = "1"; $env:UV_NATIVE_TLS = "1"
-    & uv sync --quiet --python 3.11 --frozen; Check "uv sync"
-  }
+  & $Uv sync --quiet --managed-python --python 3.11 --frozen; Check "uv sync"
 } finally { Pop-Location }
 Remove-Item Env:UV_PROJECT_ENVIRONMENT
 if (Test-Path "$Priv\.scrub") {   # someone relied on it: say so rather than let them find out
@@ -94,7 +111,7 @@ Copy-Item "$Repo\profile\uncensored_prefill.json" $Priv -Force
 
 # --- 3. the engine ---------------------------------------------------------------------------
 Say "Setting up the engine (a few minutes the first time)"
-& powershell -ExecutionPolicy Bypass -NoProfile -File "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome
+& powershell -ExecutionPolicy Bypass -NoProfile -File "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -Python $Py
 Check "building the engine"
 
 # --- 4. the local model (-Local) -------------------------------------------------------------
@@ -136,13 +153,18 @@ try {
   }
   Register-ScheduledTask @task -Force | Out-Null
 } catch { Write-Host "   Task Scheduler refused it ($($_.Exception.Message.Trim())), so ghost starts it when needed." }
-& $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())" $Priv
-if ($LASTEXITCODE -ne 0) { throw "the background service didn't start. Its log is $Priv\bridge.log" }
+$why = & $Py -Es -c "import sys; sys.path.insert(0, sys.argv[1]); import launch; print('' if launch.ensure_bridge() else launch.bridge_problem())" $Priv
+if ("$why".Trim() -or $LASTEXITCODE -ne 0) { throw "ghost's background service isn't running: $why" }
 
 # --- 7. the commands -------------------------------------------------------------------------
 Say "Installing the ghost command"
 foreach ($name in "ghost.cmd", "ghost-login.cmd", "ghost-update.cmd", "ghost-update.ps1", "ghost-uninstall.cmd", "ghost-uninstall.ps1") {
-  $text = [IO.File]::ReadAllText("$Repo\bin\windows\$name").Replace("__PYTHON__", $Py).Replace("__GHOST_HOME__", $GhostHome).Replace("__ENG__", $Eng)
+  # Your folder by its variable: these files are read in a code page your name may not be in.
+  $you = if ($name.EndsWith(".cmd")) { "%USERPROFILE%" } else { '$env:USERPROFILE' }
+  $text = [IO.File]::ReadAllText("$Repo\bin\windows\$name")
+  foreach ($path in @(("__PYTHON__", $Py), ("__GHOST_HOME__", $GhostHome), ("__ENG__", $Eng))) {
+    $text = $text.Replace($path[0], $path[1].Replace($env:USERPROFILE, $you))
+  }
   Write-Text "$BinDir\$name" ($text -replace "`r?`n", "`r`n")   # cmd misreads labels in files with bare newlines
 }
 & "$Repo\scripts\fork-engine.ps1" -Eng $Eng -GhostHome $GhostHome -RefreshGateway
@@ -152,4 +174,5 @@ if ("$userPath" -notlike "*$BinDir*") { [Environment]::SetEnvironmentVariable("P
 $who = & $Py -Es "$Priv\ghost_login.py" --status
 if ($LASTEXITCODE -eq 0) { Say "ghost is ready. $who." } else { Say "ghost is ready. It asks you to log in the first time." }
 Write-Host "   Open a new terminal and run:  ghost"
+$lock.Dispose()
 exit 0

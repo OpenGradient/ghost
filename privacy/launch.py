@@ -5,13 +5,16 @@ Runs the engine on ghost's own profile. Hosted models go through the local bridg
 seals every request to a TEE enclave; `ghost --local` never leaves this machine. Nothing is contacted
 before you log in.
 """
+import hmac
 import http.client
 import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -105,14 +108,26 @@ def pin_route():
 
 # ── the bridge ────────────────────────────────────────────────────────────────
 def bridge_up():
+    """Is the bridge answering, and is it yours?"""
+    nonce = secrets.token_hex(8)
     conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=2)
     try:
-        conn.request("GET", "/healthz")
-        return conn.getresponse().status == 200
+        conn.request("GET", f"/healthz?{nonce}")
+        resp = conn.getresponse()
+        return resp.status == 200 and hmac.compare_digest(resp.headers.get("X-Ghost-Proof") or "", ghost_auth.bridge_proof(nonce))
     except (OSError, http.client.HTTPException):
         return False
     finally:
         conn.close()
+
+
+def port_taken():
+    """Something answers on the bridge's port (and, when the bridge isn't up, it isn't the bridge)."""
+    try:
+        socket.create_connection(("127.0.0.1", PORT), timeout=2).close()
+        return True
+    except OSError:
+        return False
 
 
 def _quiet(*cmd):
@@ -150,6 +165,8 @@ def ensure_bridge():
     """It runs as a background service; start it if something stopped it."""
     if bridge_up():
         return True
+    if port_taken() and not bridge_up():
+        return False
     if not _start_service():   # no service manager here, or none that has it
         try:
             _start_process()
@@ -160,6 +177,11 @@ def ensure_bridge():
         if bridge_up():
             return True
     return False
+
+
+def bridge_problem():
+    return (f"another program is using port {PORT}, which ghost's bridge needs (or someone else on this machine is running ghost)"
+            if port_taken() else f"it didn't start; its log is {PRIV / 'bridge.log'}")
 
 
 # ── the engine ────────────────────────────────────────────────────────────────
@@ -273,6 +295,9 @@ def main(argv):
             return stop
     pin_route()
     if not ensure_bridge():
+        if port_taken():   # whoever it is, they'd be sent your prompts
+            say(f"{bridge_problem()}. Close it, then start ghost again.")
+            return 1
         say("ghost's background service isn't running, so hosted models won't answer. Fix it with: ghost update")
     if sys.stderr.isatty():
         say(status_line(config, args))

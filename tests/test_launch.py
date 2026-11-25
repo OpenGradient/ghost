@@ -1,11 +1,13 @@
 """The launcher: what runs the engine, what asks for a login first, and what must contact nobody."""
 import os
+import socket
 import subprocess
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -125,8 +127,17 @@ def test_a_chat_starts_the_bridge_then_the_engine(box):
 def test_a_dead_bridge_is_reported_and_the_engine_still_runs(box, monkeypatch, capsys):
     box.log_in()
     monkeypatch.setattr(launch, "ensure_bridge", lambda: False)
+    monkeypatch.setattr(launch, "port_taken", lambda: False)
     assert launch.main([]) == 0 and box.ran == [[]]
     assert "background service isn't running" in capsys.readouterr().err
+
+
+def test_another_program_on_the_bridges_port_never_gets_a_prompt(box, monkeypatch, capsys):
+    box.log_in()
+    monkeypatch.setattr(launch, "ensure_bridge", lambda: False)
+    monkeypatch.setattr(launch, "port_taken", lambda: True)
+    assert launch.main(["-z", "a secret"]) == 1 and box.ran == []
+    assert "another program is using port 8788" in capsys.readouterr().err
 
 
 def test_status_line(box):
@@ -182,41 +193,63 @@ def real(tmp_path, monkeypatch):
     """The real ensure_bridge, with the service manager and the process start replaced."""
     class Health(BaseHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200 if self.path == "/healthz" else 404)
+            path, _, nonce = self.path.partition("?")
+            self.send_response(200 if path == "/healthz" else 404)
+            if proves:
+                self.send_header("X-Ghost-Proof", launch.ghost_auth.bridge_proof(nonce))
             self.end_headers()
 
         def log_message(self, *args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
-    monkeypatch.setattr(launch, "PORT", server.server_port)
+    with socket.socket() as free:
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+    monkeypatch.setattr(launch, "PORT", port)
     monkeypatch.setattr(launch, "PRIV", tmp_path)
-    calls = []
+    monkeypatch.setattr(launch.ghost_auth, "BRIDGE_KEY_FILE", tmp_path / "bridge.key")
+    calls, servers, proves = [], [], [1]
+
+    def listen():
+        servers.append(ThreadingHTTPServer(("127.0.0.1", port), Health))
+        threading.Thread(target=servers[0].serve_forever, daemon=True).start()
 
     def serve(name, ok=True):
         def start():
             calls.append(name)
             if ok:
-                threading.Thread(target=server.serve_forever, daemon=True).start()
+                listen()
             return ok
         return start
-    server.socket.settimeout(0.1)
-    yield lambda **starts: [monkeypatch.setattr(launch, k, serve(k, v)) for k, v in starts.items()], calls
-    server.shutdown() if calls else None
-    server.server_close()
+    setup = SimpleNamespace(listen=listen, calls=calls, proves=proves,
+                            start=lambda **starts: [monkeypatch.setattr(launch, k, serve(k, v)) for k, v in starts.items()])
+    yield setup
+    for server in servers:
+        server.shutdown()
+        server.server_close()
 
 
 def test_bridge_is_started_by_the_service_manager(real):
-    setup, calls = real
-    setup(_start_service=True, _start_process=True)
-    assert launch.ensure_bridge() and calls == ["_start_service"]
-    assert launch.ensure_bridge() and calls == ["_start_service"]   # it's up now: nothing to start
+    real.start(_start_service=True, _start_process=True)
+    assert launch.ensure_bridge() and real.calls == ["_start_service"]
+    assert launch.ensure_bridge() and real.calls == ["_start_service"]   # it's up now: nothing to start
 
 
 def test_bridge_is_started_by_us_where_there_is_no_service_manager(real):
-    setup, calls = real
-    setup(_start_service=False, _start_process=True)
-    assert launch.ensure_bridge() and calls == ["_start_service", "_start_process"]
+    real.start(_start_service=False, _start_process=True)
+    assert launch.ensure_bridge() and real.calls == ["_start_service", "_start_process"]
+
+
+def test_a_bridge_that_is_not_yours_is_not_the_bridge(real):
+    """Another program, or the ghost of someone else on this machine: /healthz says ok, and that proves nothing."""
+    real.start(_start_service=True, _start_process=True)
+    real.proves.clear()
+    real.listen()
+    assert not launch.ensure_bridge() and real.calls == [] and "another program" in launch.bridge_problem()
+    real.proves.append(1)
+    assert launch.ensure_bridge() and real.calls == []
+    key = launch.ghost_auth.BRIDGE_KEY_FILE
+    assert len(key.read_text()) == 64 and (os.name == "nt" or key.stat().st_mode & 0o77 == 0)
 
 
 def test_our_own_bridge_process(tmp_path, monkeypatch):

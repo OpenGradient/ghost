@@ -4,8 +4,7 @@
 # The Hermes release the engine is built on is pinned in the source (engine.pin), so a newer engine arrives
 # here too, once ghost's patches have been checked against it.
 set -e
-GHOST_HOME="__GHOST_HOME__"
-export GHOST_HOME GHOST_ENGINE="__ENG__"
+export GHOST_HOME=__GHOST_HOME__ GHOST_ENGINE=__ENG__
 
 # The source you installed from, or ghost's own copy.
 SRC="$(cat "$GHOST_HOME/.src" 2>/dev/null || true)"

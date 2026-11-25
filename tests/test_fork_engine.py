@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -180,6 +181,38 @@ def test_gateway_does_not_count_as_open(box, shape):
     assert box.run(src=box.source("one")).returncode == 0
     box.process(shape, "--profile", "uncensored", "gateway", "run")
     assert box.run("--check").returncode == 0
+
+
+def test_what_a_chat_leaves_running_does_not_count_either(box):
+    """Closed a minute ago, yet `ghost update` said it was open: the gateway idles on, with helpers of the engine's."""
+    assert box.run(src=box.source("one")).returncode == 0
+    box.procs.append(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", f"{box.engine}/hermes_cli/process_supervisor.sh", "123"]))
+    helper = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', '{box.engine}/tools/kernel.py']).wait()"
+    box.procs.append(subprocess.Popen([sys.executable, "-c", helper, f"{box.state}/tools/python", "gateway run --idle-exit"], start_new_session=True))
+    deadline = time.time() + 5
+    while "tools/kernel.py" not in subprocess.run(["pgrep", "-fl", "tools/kernel.py"], capture_output=True, text=True).stdout and time.time() < deadline:
+        time.sleep(0.05)
+    try:
+        assert box.run("--check").returncode == 0
+    finally:
+        os.killpg(box.procs[-1].pid, 9)
+
+
+@pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+def test_a_build_that_is_stopped_restores_the_previous_engine(box, stop):
+    """Ctrl-C, a shutdown, or a closed terminal window."""
+    assert box.run(src=box.source("one")).returncode == 0
+    slow = box.source("two")
+    (slow / "scripts" / "install.sh").write_text("#!/bin/bash\ntouch \"$HOME/building\"\nsleep 30\n")
+    env = {"PATH": f"{box.bin}:{os.environ['PATH']}", "HOME": str(box.home), "GHOST_PYTHON": "true", "HERMES_SRC": str(slow)}
+    build = subprocess.Popen(["bash", str(BUILDER)], env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + 20
+    while not (box.home / "building").exists():
+        assert time.time() < deadline
+        time.sleep(0.05)
+    os.killpg(build.pid, stop)
+    assert build.wait(timeout=20) == 130
+    assert (box.engine / "one").exists() and not (box.engine / "two").exists() and not box.old.exists()
 
 
 @pytest.fixture

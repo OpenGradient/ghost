@@ -11,6 +11,7 @@
 param(
   [string]$Eng       = $(if ($env:GHOST_ENGINE) { $env:GHOST_ENGINE } else { "$env:USERPROFILE\.ghost-engine" }),
   [string]$GhostHome = $(if ($env:GHOST_HOME)   { $env:GHOST_HOME }   else { "$env:USERPROFILE\.ghost" }),
+  [string]$Python    = "python",   # a Python 3.9+ to run debrand.py
   [switch]$Check,
   [switch]$RefreshGateway
 )
@@ -118,7 +119,7 @@ foreach ($d in ".git",".github","tests","tests-js","evals","website","contributo
 
 # ---------- 2. debrand + seal ----------
 Write-Host "==> debranding"
-& uv run --no-project --python 3.11 python "$here\debrand.py" $New
+& $Python -Es "$here\debrand.py" $New
 if ($LASTEXITCODE -ne 0) { throw "debrand.py failed" }
 $stamp = [ordered]@{
   schemaVersion = 2; commit = $Commit; commitDate = $null; branch = $null

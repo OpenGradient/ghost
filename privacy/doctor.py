@@ -30,7 +30,7 @@ def login():
 def bridge():
     if launch.ensure_bridge():
         return True, f"running on 127.0.0.1:{launch.PORT}", None
-    return False, f"isn't running; its log is {launch.PRIV / 'bridge.log'}", "ghost update"
+    return False, f"isn't running: {launch.bridge_problem()}", None if launch.port_taken() else "ghost update"
 
 
 def relay():

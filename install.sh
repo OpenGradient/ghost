@@ -20,12 +20,16 @@ main() {
     Darwin|Linux) ;;
     *) echo "ghost runs on macOS, Linux and WSL2 (and on Windows with install.ps1). This is: $OS." >&2; exit 1 ;;
   esac
+  if [ "$(id -u)" = 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    echo "Run this without sudo: ghost installs for you alone, and needs no administrator. (For root's own use: SUDO_USER= bash install.sh)" >&2
+    exit 1
+  fi
 
   # Run as `curl ... | bash` there is no checkout: get one, and carry on from there.
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
   if [ -z "$REPO" ] || [ ! -f "$REPO/profile/config.yaml" ]; then
     need_git
-    SRC="${GHOST_SRC_DIR:-$HOME/.ghost-src}"
+    SRC="$HOME/.ghost-src"
     if [ ! -d "$SRC/.git" ]; then
       rm -rf "$SRC"; git clone --quiet https://github.com/OpenGradient/ghost.git "$SRC"
     else   # always the released branch, whatever was checked out before
@@ -47,7 +51,13 @@ main() {
   LOG="$GHOST_HOME/install.log"
   HERMES_VERSION=""; . "$REPO/engine.pin"
   LOCAL_MODEL="" NOTES=()
-  mkdir -p "$GHOST_HOME"; : > "$LOG"
+  # What ghost brings stays in its own folder: uv, the Pythons it fetches, and their cache. uv trusts the
+  # certificates the system trusts, as curl and git do: a company network may have one of its own.
+  export UV_CACHE_DIR="$GHOST_HOME/cache/uv" UV_PYTHON_INSTALL_DIR="$GHOST_HOME/python" UV_SYSTEM_CERTS=1 UV_NATIVE_TLS=1
+  unset PYTHONHOME PYTHONPATH VIRTUAL_ENV
+  mkdir -p "$GHOST_HOME"; chmod 700 "$GHOST_HOME"
+  one_at_a_time
+  : > "$LOG"
   options
   ui
 
@@ -74,6 +84,18 @@ options() {
   [ -z "$GHOST_LOCAL_32B" ] || GHOST_LOCAL=1
 }
 
+one_at_a_time() {   # (two would build the engine over each other)
+  LOCK="$GHOST_HOME/.installing"
+  local pid
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && [ "$pid" != $$ ] && kill -0 "$pid" 2>/dev/null; then
+      echo "ghost is already being installed or updated (pid $pid). Wait for that to finish." >&2; exit 1
+    fi   # (or whoever left it there is gone)
+  fi
+  echo $$ > "$LOCK/pid"
+}
+
 remember() {   # what `ghost update` and `ghost uninstall` need to know
   local name
   echo "$REPO" > "$GHOST_HOME/.src"
@@ -91,7 +113,7 @@ ui() {
     FANCY=1 BOLD=$'\033[1m' DIM=$'\033[2m' GOLD=$'\033[38;5;220m' GREEN=$'\033[32m' RED=$'\033[31m' OFF=$'\033[0m'
   fi
   trap on_exit EXIT
-  trap 'exit 130' INT TERM
+  trap 'exit 130' INT TERM HUP
 }
 
 step() {   # step "what it does" command...
@@ -114,7 +136,7 @@ took() { local s=$((SECONDS - STARTED)); [ "$s" -lt 5 ] || printf ' %s%ss%s' "$D
 
 spin() {
   [ -n "$FANCY" ] || return 0
-  ( trap - EXIT INT TERM
+  ( trap - EXIT INT TERM HUP
     frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0
     while kill -0 $$ 2>/dev/null; do
       printf '\r\033[2K  %s%s%s %s%s' "$GOLD" "${frames[i % 10]}" "$OFF" "$STEP" "$(took)" >&3
@@ -141,6 +163,7 @@ die() {   # a failure we can explain: no need to show the log
 on_exit() {
   local code=$?
   unspin
+  rm -rf "$LOCK"
   [ "$code" -ne 0 ] && [ -n "$STEP" ] || return 0
   printf '  %s✗%s %s\n\n' "$RED" "$OFF" "$STEP" >&3
   [ "$code" -ne 130 ] || { printf '  Stopped. Run the installer again to carry on.\n\n' >&3; return 0; }
@@ -164,16 +187,14 @@ need_git() {   # (on a Mac without the command line tools, `git` exists but only
 
 check_machine() {
   need_git
-  have curl || die "ghost needs curl: install it with your package manager, then run this again."
-  local open
+  local tool open
+  for tool in curl tar find; do have "$tool" || die "ghost needs $tool: install it with your package manager, then run this again."; done
+  case "$(ldd --version 2>&1 || true)" in *musl*) die "ghost needs a Linux with glibc (Debian, Ubuntu, Fedora, Arch, ...). This one uses musl, as Alpine does." ;; esac
   if ! open="$(GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --check 2>&1)"; then
     case "$open" in "!! ghost is open"*) die "${open#!! }" ;; *) echo "$open"; return 1 ;; esac
   fi
-  if ! have uv; then   # it brings the bridge's own Python, so the system's never matters
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  fi
-  have uv || die "couldn't install uv (https://docs.astral.sh/uv/getting-started/installation/). Install it, then run this again."
+  space
+  get_uv
   if [ -n "$GHOST_LOCAL" ] && ! have ollama; then
     ! have brew || brew install --cask ollama || true
     have ollama || die "GHOST_LOCAL needs Ollama: install it from https://ollama.com (or drop GHOST_LOCAL), then run this again."
@@ -181,10 +202,27 @@ check_machine() {
   remember
 }
 
+space() {   # (the first time: an update needs little)
+  local need=3500 free
+  [ -z "$GHOST_NO_BROWSER" ] || need=2000
+  [ ! -d "$ENG" ] || return 0
+  free="$(df -Pm "$GHOST_HOME" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+  case "$free" in ""|*[!0-9]*) return 0 ;; esac
+  [ "$free" -ge "$need" ] || die "ghost needs about $((need / 1000)).$((need % 1000 / 100)) GB of disk, and there are $((free / 1000)).$((free % 1000 / 100)) GB free here."
+}
+
+# uv brings the bridge's own Python, so the system's never matters. Ours, because one you have may be too old.
+UV_VERSION=0.13.10
+get_uv() {
+  UV="$GHOST_HOME/uv/uv"
+  case "$("$UV" --version 2>/dev/null)" in "uv $UV_VERSION"*) return 0 ;; esac
+  curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | UV_UNMANAGED_INSTALL="$GHOST_HOME/uv" sh || true
+  [ -x "$UV" ] || ! have uv || UV=uv
+  "$UV" --version || die "couldn't download uv, which brings ghost's Python (from astral.sh and github.com). Check your connection, then run this again."
+}
+
 install_bridge() {
-  # (Again with the system's certificates, for a network that has one of its own.)
-  ( cd "$REPO" && export UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" \
-    && { uv sync --python 3.11 --frozen || UV_SYSTEM_CERTS=1 UV_NATIVE_TLS=1 uv sync --python 3.11 --frozen; } )
+  ( cd "$REPO" && UV_PROJECT_ENVIRONMENT="$GHOST_HOME/venv" "$UV" sync --managed-python --python 3.11 --frozen )
   mkdir -p "$PRIV"
   if [ -e "$PRIV/.scrub" ]; then   # someone relied on it: say so rather than let them find out
     NOTES+=("Redaction was removed. What you send is sealed to a TEE enclave, but no longer redacted first.")
@@ -235,13 +273,16 @@ free_port() {   # stopping a service finishes in its own time, and two bridges c
   done
 }
 
-stop_bridge() {   # whichever process holds the port, as it says itself (minimal systems have no `pkill`)
+stop_bridge() {   # whichever process holds the port, as it says itself, if it is ours (minimal systems have no `pkill`, nor `ps`)
   local pid
-  pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p' || true)"
-  [ -z "$pid" ] || kill "$pid" || true
+  pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p' || true)"
+  [ -n "$pid" ] || return 0
+  case "$(ps -ww -o command= -p "$pid" 2>/dev/null || tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)" in
+    *"$PRIV/"*) kill "$pid" || true ;;
+  esac
 }
 
-fill() { sed -e "s#__PYTHON__#$PYTHON#g" -e "s#__GHOST_HOME__#$GHOST_HOME#g" -e "s#__ENG__#$ENG#g" "$1"; }
+fill() { "$PYTHON" -Es "$REPO/scripts/fill.py" "$1" "__PYTHON__=$PYTHON" "__GHOST_HOME__=$GHOST_HOME" "__ENG__=$ENG"; }
 
 # The bridge runs in the background and restarts by itself: launchd on macOS, systemd on Linux. Where neither
 # is available (some containers, WSL without systemd) `ghost` starts it when it's needed.
@@ -280,35 +321,55 @@ start_service() {
     pkill -f "veil serve --foreground --skip-setup --port 11435" || true
     free_port
   fi
-  "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch; sys.exit(not launch.ensure_bridge())' "$PRIV" \
-    || die "the background service didn't start. Its log is $PRIV/bridge.log"
+  local why
+  why="$(GHOST_HOME="$GHOST_HOME" "$PYTHON" -Es -c 'import sys; sys.path.insert(0, sys.argv[1]); import launch
+print("" if launch.ensure_bridge() else launch.bridge_problem())' "$PRIV")" || why="its log is $PRIV/bridge.log"
+  [ -z "$why" ] || die "ghost's background service isn't running: $why."
 }
 
 install_commands() {
   local name
   mkdir -p "$BIN"
+  if [ -e "$BIN/ghost" ] && ! grep -qsi -e GHOST_HOME -e hermes "$BIN/ghost"; then
+    mv "$BIN/ghost" "$BIN/ghost.other"   # (the Ghost blog's command has that name too)
+    NOTES+=("There was another program at $BIN/ghost. It is now $BIN/ghost.other.")
+  fi
   for name in ghost ghost-login ghost-update ghost-uninstall; do
     fill "$REPO/bin/$name" > "$BIN/.$name.new"
     chmod +x "$BIN/.$name.new"
     mv -f "$BIN/.$name.new" "$BIN/$name"   # in one move: `ghost update` is running from one of these
   done
+  add_to_path
   GHOST_ENGINE="$ENG" GHOST_HOME="$GHOST_HOME" bash "$REPO/scripts/fork-engine.sh" --refresh-gateway
 }
 
+add_to_path() {   # a line in your shell's startup file, where it's needed; `ghost uninstall` takes it out again
+  case ":$PATH:" in *":$BIN:"*) return 0 ;; esac
+  local rc line='export PATH="$HOME/.local/bin:$PATH"' file
+  case "${SHELL:-}" in
+    */zsh)  rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    */fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/ghost.fish" line='fish_add_path -g "$HOME/.local/bin"'
+            mkdir -p "$(dirname "$rc")" ;;
+    */bash) rc="$HOME/.bashrc"
+            if [ "$OS" = Darwin ]; then   # a login shell, which reads only the first of these there is
+              for file in .profile .bash_login .bash_profile; do [ ! -f "$HOME/$file" ] || rc="$HOME/$file"; done
+              [ "$rc" != "$HOME/.bashrc" ] || rc="$HOME/.bash_profile"
+            fi ;;
+    *)      rc="$HOME/.profile" ;;
+  esac
+  grep -qs '\.local/bin' "$rc" || printf '\n%s  # ghost\n' "$line" >> "$rc"
+}
+
 finish() {
-  local who note rc
+  local who note found
   printf '\n' >&3
   for note in ${NOTES[@]+"${NOTES[@]}"}; do printf '  %s%s%s\n' "$DIM" "$note" "$OFF" >&3; done
   [ "${#NOTES[@]}" -eq 0 ] || printf '\n' >&3
   case ":$PATH:" in
-    *":$BIN:"*) ;;
-    *) if (cd "$HOME" && grep -qs '\.local/bin' .zshrc .zprofile .zshenv .bashrc .bash_profile .profile); then
-         printf '  Open a new terminal first, so that it finds ~/.local/bin.\n\n' >&3
-       else
-         case "${SHELL:-}" in */zsh) rc="~/.zshrc" ;; */bash) rc="~/.bashrc" ;; *) rc="~/.profile" ;; esac
-         printf '  First put ~/.local/bin on your PATH, then open a new terminal:\n\n' >&3
-         printf '      echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> %s\n\n' "$rc" >&3
-       fi ;;
+    *":$BIN:"*)
+      found="$(command -v ghost || true)"
+      [ "$found" = "$BIN/ghost" ] || printf '  Another program called ghost comes first on your PATH (%s). This one is %s.\n\n' "$found" "$BIN/ghost" >&3 ;;
+    *) printf '  Open a new terminal first, so that it finds the command.\n\n' >&3 ;;
   esac
   if who="$("$BIN/ghost-login" --status 2>/dev/null)"; then printf '  %sghost is ready.%s %s.\n\n' "$BOLD" "$OFF" "$who" >&3
   else printf '  %sghost is ready.%s It asks you to log in the first time.\n\n' "$BOLD" "$OFF" >&3; fi

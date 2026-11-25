@@ -6,8 +6,8 @@
 #   ghost uninstall --purge     delete your data too
 set -uo pipefail
 
-GHOST_HOME="__GHOST_HOME__"
-ENG="__ENG__"
+GHOST_HOME=__GHOST_HOME__
+ENG=__ENG__
 BIN="$HOME/.local/bin"
 SRC="$(cat "$GHOST_HOME/.src" 2>/dev/null || true)"
 
@@ -37,6 +37,13 @@ ours_home() { [ -f "$1/.src" ] && [ -d "$1/privacy" ]; }
 if ! ours_home "$GHOST_HOME"; then
   echo "ghost isn't installed here ($GHOST_HOME)."
   exit 0
+fi
+
+open="$( (ps axww -o pid=,command= 2>/dev/null || true) | awk -v e="$ENG" \
+  '(index($0, e "/") || index($0, e "\047")) && !/gateway run|process_supervisor/ { print $1 }')"
+if [ -n "$open" ] && [ -z "${GHOST_FORCE:-}" ]; then
+  echo "ghost is open (pid $(echo $open)). Close those windows and run this again." >&2
+  exit 1
 fi
 
 echo "This removes ghost: its engine ($ENG), background services and commands."
@@ -69,8 +76,12 @@ else
   systemctl --user daemon-reload >/dev/null 2>&1
 fi
 # One `ghost` started itself, where there is no service manager.
-pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: //p')"
-[ -z "$pid" ] || kill "$pid" 2>/dev/null
+pid="$(curl -s -D - -o /dev/null --max-time 2 http://127.0.0.1:8788/healthz | tr -d '\r' | sed -n 's/^X-Ghost-Pid: \([0-9]*\)$/\1/p')"
+if [ -n "$pid" ]; then
+  case "$(ps -ww -o command= -p "$pid" 2>/dev/null || tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" in
+    *"$GHOST_HOME/privacy/"*) kill "$pid" 2>/dev/null ;;
+  esac
+fi
 
 echo "Removing files"
 for dir in "$ENG" "$ENG.old" "$ENG.new"; do
@@ -79,8 +90,15 @@ for dir in "$ENG" "$ENG.old" "$ENG.new"; do
   fi
 done
 for name in ghost ghost-login ghost-update; do
-  if grep -qsF "$GHOST_HOME" "$BIN/$name"; then rm -f "$BIN/$name"; fi
+  if grep -qs GHOST_HOME "$BIN/$name"; then rm -f "$BIN/$name"; fi
 done
+if [ -e "$BIN/ghost.other" ] && [ ! -e "$BIN/ghost" ]; then mv "$BIN/ghost.other" "$BIN/ghost"; fi   # what had the name before
+for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if grep -qs '\.local/bin.*  # ghost$' "$rc"; then   # the line the installer put there
+    rest="$(grep -v '\.local/bin.*  # ghost$' "$rc")"; printf '%s\n' "$rest" > "$rc"
+  fi
+done
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/ghost.fish"
 if [ "$SRC" = "$HOME/.ghost-src" ] && [ -d "$SRC/.git" ]; then
   if [ -z "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then rm -rf "$SRC"; else echo "   left $SRC (it has changes of yours)"; fi
 fi
@@ -89,8 +107,9 @@ if [ -n "$PURGE" ]; then
   rm -rf "$GHOST_HOME"
   echo "ghost and all of its data are gone."
 else
-  for dir in venv tools installs cache privacy; do rm -rf "${GHOST_HOME:?}/$dir"; done
-  rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/install.log"
-  echo "ghost is gone. Your chats, skills and settings are still in $GHOST_HOME (delete it to remove them too)."
+  for dir in venv tools installs cache python uv privacy/__pycache__; do rm -rf "${GHOST_HOME:?}/$dir"; done
+  rm -f "$GHOST_HOME/.src" "$GHOST_HOME/.install-env" "$GHOST_HOME/install.log" "$GHOST_HOME"/privacy/*.py \
+        "$GHOST_HOME/privacy/uncensored_prefill.json" "$GHOST_HOME/privacy/bridge.key" "$GHOST_HOME"/privacy/bridge.log*
+  echo "ghost is gone. Your chats, skills, settings and login are still in $GHOST_HOME (delete it to remove them too)."
 fi
 rm -f "$BIN/ghost-uninstall"

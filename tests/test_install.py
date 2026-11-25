@@ -2,8 +2,10 @@
 
 The real engine and services are covered by CI's install jobs; this is everything around them.
 """
+import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,9 +38,20 @@ chmod +x "$GHOST_ENGINE/.hermes/bin/hermes"
 """
 
 
+# What astral.sh serves: an installer that puts uv where it's told.
+UV = r"""#!/bin/sh
+echo "uv $*" >> "$HOME/calls"
+[ "$1" != --version ] || { echo "uv VERSION (stub)"; exit; }
+mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
+printf '#!/bin/sh\nexec "PYTHON" "$@"\n' > "$UV_PROJECT_ENVIRONMENT/bin/python"
+chmod +x "$UV_PROJECT_ENVIRONMENT/bin/python"
+"""
+UV_VERSION = next(line.split("=")[1] for line in (REPO / "install.sh").read_text().splitlines() if line.startswith("UV_VERSION="))
+
+
 class Machine:
-    def __init__(self, root, system, port):
-        self.home, self.bin, self.repo = root / "home", root / "stubs", root / "repo"
+    def __init__(self, root, system, port, home="home"):
+        self.home, self.bin, self.repo = root / home, root / "stubs", root / "repo"
         self.ghost, self.engine, self.commands = self.home / ".ghost", self.home / ".ghost-engine", self.home / ".local" / "bin"
         self.profile = self.ghost / "profiles" / "uncensored"
         for directory in (self.home, self.bin, self.repo):
@@ -52,10 +65,12 @@ class Machine:
         launch.write_text(launch.read_text(encoding="utf-8").replace("PORT = 8788", f"PORT = {port}"), encoding="utf-8")
         log = 'echo "$(basename "$0") $*" >> "$HOME/calls"\n'
         self.stub("uname", f"echo {system}\n")
-        self.stub("uv", log + 'mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"\n'
-                  f'printf \'#!/bin/sh\\nexec "{sys.executable}" "$@"\\n\' > "$UV_PROJECT_ENVIRONMENT/bin/python"\n'
-                  'chmod +x "$UV_PROJECT_ENVIRONMENT/bin/python"\n')
-        self.stub("curl", log + "exit 7\n")       # nobody is on the bridge's port
+        (root / "uv").write_text(UV.replace("VERSION", UV_VERSION).replace("PYTHON", sys.executable))
+        (root / "get-uv").write_text(f'mkdir -p "$UV_UNMANAGED_INSTALL"; cp "{root}/uv" "$UV_UNMANAGED_INSTALL/uv"; chmod +x "$UV_UNMANAGED_INSTALL/uv"\n')
+        self.stub("curl", log + f'case "$*" in *astral.sh/uv/{UV_VERSION}/install.sh) [ ! -e "$HOME/offline" ] || exit 6; cat "{root}/get-uv" ;; '
+                  '*) exit 7 ;; esac\n')       # nobody is on the bridge's port
+        self.stub("id", '[ "$1" = -u ] && [ -e "$HOME/root" ] && echo 0 || exec /usr/bin/id "$@"\n')
+        self.stub("ldd", '[ -e "$HOME/musl" ] && echo "musl libc (x86_64)" >&2 || echo "ldd (GNU libc) 2.36"\n')
         for name in ("launchctl", "loginctl", "pkill"):
             self.stub(name, log)
         self.stub("systemctl", log + '[ "$2" != show-environment ] || [ ! -e "$HOME/no-systemd" ]\n')
@@ -82,15 +97,19 @@ class Machine:
 @pytest.fixture
 def machine(tmp_path):
     class Health(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self):   # as ghost's own bridge
+            key = next(tmp_path.glob("*/.ghost/privacy")) / "bridge.key"
+            if not key.exists():
+                key.write_text("k")
             self.send_response(200)
+            self.send_header("X-Ghost-Proof", hmac.new(key.read_bytes(), self.path.partition("?")[2].encode(), "sha256").hexdigest())
             self.end_headers()
 
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield lambda system="Linux": Machine(tmp_path, system, server.server_port)
+    yield lambda system="Linux", **options: Machine(tmp_path, system, server.server_port, **options)
     server.shutdown()
     server.server_close()
 
@@ -108,7 +127,7 @@ def test_fresh_install(machine, system):
     assert "previous" not in done.stdout and "Ghost" in (m.profile / "SOUL.md").read_text()
     assert "compiling the engine" in (m.ghost / "install.log").read_text()
     for name in ("ghost", "ghost-login", "ghost-update", "ghost-uninstall"):
-        assert os.access(m.commands / name, os.X_OK) and "__" not in (m.commands / name).read_text()
+        assert os.access(m.commands / name, os.X_OK) and not re.search("__[A-Z]", (m.commands / name).read_text())
     assert (m.ghost / ".src").read_text() == f"{m.repo}\n" and (m.ghost / ".install-env").read_text() == ""
     config = (m.profile / "config.yaml").read_text()
     assert "ollama-local" not in config and "__" not in config and f"{m.ghost}/privacy/uncensored_prefill.json" in config
@@ -123,7 +142,8 @@ def test_a_new_install_contacts_nobody_until_you_log_in(machine):
     assert (chat.returncode, chat.stdout) == (1, "") and "not logged in. Run: ghost login" in chat.stderr
     assert m.command("ghost", "--version").stdout == "Ghost v9\n"
     assert m.command("ghost-login", "--status").returncode == 1
-    assert {c for c in m.calls() if c.startswith("curl")} <= {"curl -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz"}
+    assert {c for c in m.calls() if c.startswith("curl")} <= {"curl -s -o /dev/null --max-time 1 http://127.0.0.1:8788/healthz",
+                                                              f"curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh"}
 
 
 def test_services_on_a_mac(machine):
@@ -152,7 +172,7 @@ def test_services_on_linux(machine):
         (units / f"{unit}.service").write_text("old")
     assert m.install().returncode == 0
     assert [p.name for p in units.iterdir()] == ["ghost-bridge.service"]
-    assert f"Environment=GHOST_HOME={m.ghost}\nExecStart={m.ghost}/venv/bin/python -Es {m.ghost}/privacy/" in (units / "ghost-bridge.service").read_text()
+    assert f'Environment="GHOST_HOME={m.ghost}"\nExecStart="{m.ghost}/venv/bin/python" -Es "{m.ghost}/privacy/' in (units / "ghost-bridge.service").read_text()
     calls = m.calls()
     for call in (*(f"systemctl --user disable --now {u}.service" for u in OLD_UNITS), "systemctl --user restart ghost-bridge.service"):
         assert call in calls
@@ -246,12 +266,94 @@ def test_a_failed_check_is_not_taken_for_an_open_ghost(machine):
     assert done.returncode == 1 and "✗ Checking this machine" in done.stdout and "something else broke" in done.stdout
 
 
-def test_path_hint(machine):
+@pytest.mark.parametrize("system, shell, existing, expect", [
+    ("Darwin", "/bin/zsh", [], ".zshrc"), ("Linux", "/usr/bin/zsh", [".zshrc"], ".zshrc"), ("Linux", "/bin/bash", [], ".bashrc"),
+    ("Darwin", "/bin/bash", [], ".bash_profile"), ("Darwin", "/bin/bash", [".profile"], ".profile"),   # a new .bash_profile would hide it
+    ("Darwin", "/bin/bash", [".profile", ".bash_profile"], ".bash_profile"), ("Linux", "/bin/dash", [], ".profile"),
+    ("Linux", "/usr/bin/fish", [], ".config/fish/conf.d/ghost.fish"),
+])
+def test_your_shell_finds_the_command(machine, system, shell, existing, expect):
+    m = machine(system)
+    for name in existing:
+        (m.home / name).write_text("# yours\n")
+    assert "Open a new terminal first" in m.install(SHELL=shell).stdout
+    startup = [p for p in (m.home / n for n in (".zshrc", ".bashrc", ".bash_profile", ".profile", ".config/fish/conf.d/ghost.fish")) if p.exists()]
+    with_line = [p for p in startup if ".local/bin" in p.read_text()]
+    assert with_line == [m.home / expect] and with_line[0].read_text().count(".local/bin") == 1
+    m.install(SHELL=shell)
+    assert with_line[0].read_text().count(".local/bin") == 1   # once
+    assert m.command("ghost-uninstall", "--yes", SHELL=shell).returncode == 0
+    assert not any(".local/bin" in p.read_text() for p in startup if p.exists())
+    assert all((m.home / name).read_text().startswith("# yours\n") for name in existing)
+
+
+def test_a_path_you_already_have_is_left_alone(machine):
     m = machine()
-    assert "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc" in m.install().stdout
     (m.home / ".zshrc").write_text('export PATH="$HOME/.local/bin:$PATH"\n')
-    assert "Open a new terminal first" in m.install().stdout
-    assert "PATH" not in m.install(PATH=f"{m.commands}:{m.bin}:{os.environ['PATH']}").stdout
+    assert "Open a new terminal first" in m.install().stdout and (m.home / ".zshrc").read_text().count("local/bin") == 1
+    (m.home / ".zshrc").unlink()
+    done = m.install(PATH=f"{m.commands}:{m.bin}:{os.environ['PATH']}")
+    assert "PATH" not in done.stdout and "terminal" not in done.stdout and not (m.home / ".zshrc").exists()
+
+
+def test_another_program_called_ghost(machine):
+    """The Ghost blog's command has the name too: not overwritten, not run by mistake without a word, and put back."""
+    m = machine()
+    m.commands.mkdir(parents=True)
+    (m.commands / "ghost").write_text("#!/usr/bin/env node\nrequire('ghost-cli')\n")
+    assert f"It is now {m.commands}/ghost.other" in m.install().stdout and "ghost-cli" in (m.commands / "ghost.other").read_text()
+    m.stub("ghost", "echo a blog\n")
+    assert f"Another program called ghost comes first on your PATH ({m.bin}/ghost)" in m.install(PATH=f"{m.bin}:{m.commands}:{os.environ['PATH']}").stdout
+    m.command("ghost-uninstall", "--yes")
+    assert "ghost-cli" in (m.commands / "ghost").read_text() and not (m.commands / "ghost.other").exists()
+
+
+def test_a_home_nobody_would_choose(machine):
+    m = machine("Darwin", home="Zoé O'Neil & co #1 $x 50%")
+    done = m.install()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert m.command("ghost", "--version").stdout == "Ghost v9\n" and m.command("ghost-login", "--status").returncode == 1
+    plist = (m.home / "Library/LaunchAgents/ai.dreamfort.ghost.plist").read_text()
+    assert "&amp; co" in plist and "& co" not in plist.replace("&amp; co", "")
+    assert m.command("ghost", "uninstall", "--yes", "--purge").returncode == 0 and not m.ghost.exists() and not m.engine.exists()
+
+
+@pytest.mark.parametrize("what, words", [
+    ("musl", "This one uses musl"), ("offline", "couldn't download uv"), ("root", "Run this without sudo"),
+])
+def test_a_machine_it_cannot_install_on_is_told_why(machine, what, words):
+    m = machine()
+    (m.home / what).touch()
+    done = m.install(SUDO_USER="mara", PATH=f"{m.bin}:/usr/bin:/bin")
+    assert done.returncode == 1 and words in done.stdout + done.stderr and not m.engine.exists()
+
+
+def test_two_installs_at_once(machine):
+    m = machine()
+    lock = m.ghost / ".installing"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(str(os.getpid()))   # someone who is still there
+    done = m.install()
+    assert done.returncode == 1 and "already being installed or updated" in done.stderr and not m.engine.exists()
+    (lock / "pid").write_text("999999")           # and someone who isn't
+    assert m.install().returncode == 0 and not lock.exists()
+
+
+def test_nobody_else_can_look_into_it(machine):
+    m = machine()
+    m.ghost.mkdir(mode=0o755)
+    m.install()
+    assert m.ghost.stat().st_mode & 0o777 == 0o700
+
+
+def test_it_keeps_to_its_own_folder(machine):
+    """uv, its Pythons and its cache; nothing in yours."""
+    m = machine()
+    m.stub("uv", 'echo "yours $*" >> "$HOME/calls"; exit 9\n')   # one you have is neither needed nor used
+    assert m.install().returncode == 0 and not any(c.startswith("yours") for c in m.calls())
+    assert (m.ghost / "uv" / "uv").exists() and m.calls().count("uv --version") == 1
+    m.install()
+    assert sum("astral.sh" in c for c in m.calls()) == 1   # it's there now
 
 
 def test_a_login_survives_an_update(machine):
@@ -314,15 +416,33 @@ def installed(machine):
 
 def test_uninstall_keeps_your_data(installed):
     m, session = installed
+    kept = {"dreamfort_api_key": "df_sk_abcd\n", "budget": "20\n", "spend.jsonl": "{}\n", "pii_denylist.txt": "mine\n"}
+    for name, text in kept.items():
+        (m.ghost / "privacy" / name).write_text(text)
     done = m.command("ghost", "uninstall", "--yes")
     assert done.returncode == 0 and "still in" in done.stdout
     assert not m.engine.exists() and not any((m.commands / c).exists() for c in ("ghost", "ghost-login", "ghost-update", "ghost-uninstall"))
     assert not (m.home / "Library/LaunchAgents/ai.dreamfort.ghost.plist").exists()
     assert not (m.home / ".config/systemd/user/ghost-bridge.service").exists()
-    assert not (m.ghost / "venv").exists() and not (m.ghost / "privacy").exists()
+    assert not any((m.ghost / name).exists() for name in ("venv", "uv", "python", "cache", ".src", ".installing"))
+    assert {p.name: p.read_text() for p in (m.ghost / "privacy").iterdir()} == kept
     assert (m.profile / "state.db").read_text() == "chats" and session.exists() and m.repo.exists()
     assert "engine -p uncensored gateway stop" in m.calls()
-    assert m.install().returncode == 0 and (m.profile / "state.db").read_text() == "chats"   # and back again
+    back = m.install()   # and back again, as you left it
+    assert back.returncode == 0 and "Logged in with your DreamFort API key (df_sk_…abcd)" in back.stdout
+    assert (m.profile / "state.db").read_text() == "chats" and (m.ghost / "privacy" / "budget").read_text() == "20\n"
+
+
+def test_uninstall_waits_for_an_open_ghost(installed):
+    m, _ = installed
+    window = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", f"{m.engine}/.hermes/bin/hermes"])
+    try:
+        done = m.command("ghost", "uninstall", "--yes")
+        assert done.returncode == 1 and f"ghost is open (pid {window.pid})" in done.stderr and m.engine.exists()
+    finally:
+        window.kill()
+        window.wait()
+    assert m.command("ghost", "uninstall", "--yes").returncode == 0
 
 
 def test_purge_removes_everything(installed):

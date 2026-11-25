@@ -114,13 +114,19 @@ class Keys:
             return self._read_windows(timeout)
         if not select.select([self._fd], [], [], timeout)[0]:
             return ""
-        data = os.read(self._fd, 65536)
+        data = self._input()
         while select.select([self._fd], [], [], 0.02)[0]:
-            more = os.read(self._fd, 65536)
-            if not more:
-                break
-            data += more
+            data += self._input()
         return data.decode("utf-8", "replace")
+
+    def _input(self):
+        try:
+            data = os.read(self._fd, 65536)
+        except OSError:
+            data = b""
+        if not data:   # the terminal is gone
+            raise Cancelled
+        return data
 
     @staticmethod
     def _read_windows(timeout):
@@ -251,7 +257,11 @@ def device_code():
     if resp.status_code in (404, 405, 501):
         return None
     resp.raise_for_status()
-    return resp.json()
+    try:
+        handshake = resp.json()
+        return handshake if {"deviceCode", "userCode", "verificationUri", "expiresIn", "interval"} <= set(handshake) else None
+    except (ValueError, TypeError):   # some other page: a network that answers for everyone, say
+        return None
 
 
 def device_login(handshake):
@@ -286,13 +296,14 @@ def device_login(handshake):
                                   json={"deviceCode": handshake["deviceCode"]}, timeout=TIMEOUT, verify=trust)
             except httpx.HTTPError:
                 continue   # a network blip; keep waiting
+            try:
+                answer = poll.json()
+                error = None if poll.status_code == 200 else answer.get("error")
+            except (ValueError, AttributeError):
+                answer, error = None, None
             if poll.status_code == 200:
                 spin.clear()
-                return poll.json()
-            try:
-                error = poll.json().get("error")
-            except ValueError:
-                error = None
+                return answer   # (save_account says if it isn't a login)
             if error in ("expired_token", "invalid_grant"):
                 break
             if error == "slow_down" or poll.status_code == 429:

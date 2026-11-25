@@ -51,16 +51,30 @@ HERMES_VERSION="" HERMES_COMMIT=""
 # Is ghost open on this engine? A process keeps importing from the engine's path for as long as it
 # runs, so swapping the tree underneath one would mix two releases in it. The background gateway
 # doesn't count: it is ours to stop and start again.
-processes() {   # minimal systems have no `ps`
-  if command -v ps >/dev/null 2>&1; then ps axww -o pid=,command=; return; fi
-  local dir
-  for dir in /proc/[0-9]*; do printf '%s %s\n' "${dir#/proc/}" "$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null)"; done
+processes() {   # each one's pid, parent and command (minimal systems have no `ps`)
+  if command -v ps >/dev/null 2>&1; then ps axww -o pid=,ppid=,command=; return; fi
+  local dir parent
+  for dir in /proc/[0-9]*; do
+    parent="$(sed -n 's/^PPid:[^0-9]*//p' "$dir/status" 2>/dev/null || true)"
+    printf '%s %s %s\n' "${dir#/proc/}" "${parent:-0}" "$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null)"
+  done
 }
 check_closed() {
   [ -d "$ENG" ] && [ -z "${GHOST_FORCE:-}" ] || return 0
-  local pids   # launched by path, or as `python -c "... '<engine>' ..."`
-  pids="$( (processes 2>/dev/null || true) | awk -v e="$ENG" \
-    '(index($0, e "/") || index($0, e "\047")) && !/gateway run/ { print $1 }')"
+  # Launched by path, or as `python -c "... '<engine>' ..."`. What the gateway started isn't a window either, nor is
+  # the reaper that goes with every engine process.
+  local pids
+  pids="$( (processes 2>/dev/null || true) | awk -v e="$ENG" -v h="$GHOST_HOME" '
+    { parent[$1] = $2; engine[$1] = index($0, e "/") || index($0, e "\047")
+      gateway[$1] = (engine[$1] || index($0, h "/tools/")) && /gateway run/; reaper[$1] = /process_supervisor[.]sh/ }
+    END {
+      for (p in engine) {
+        if (!engine[p] || reaper[p]) continue
+        q = p; hops = 0
+        while ((q in parent) && !gateway[q] && hops++ < 64) q = parent[q]
+        if (!gateway[q]) print p
+      }
+    }')"
   [ -z "$pids" ] && return 0
   echo "!! ghost is open (pid $(echo $pids)). Close those windows and re-run, or set GHOST_FORCE=1." >&2
   return 1
@@ -91,6 +105,7 @@ if current; then echo "==> the engine is already this build: $ENG"; exit 0; fi
 check_closed
 
 # ---------- 1. fetch ----------
+trap 'exit 130' INT TERM HUP   # so that the traps below run, whatever stops this
 trap 'rm -rf "$NEW"' EXIT   # a build that stops here leaves the current engine untouched
 rm -rf "$NEW"; mkdir -p "$(dirname "$NEW")" "$GHOST_HOME"
 if [ -n "${HERMES_SRC:-}" ]; then

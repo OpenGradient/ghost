@@ -319,7 +319,10 @@ def test_doctor_contacts_nobody_before_you_log_in(dream, machine, capsys):
     (lambda d, m: setattr(d, "relay", 503), "✗ DreamFort  isn't well (503)"),
     (lambda d, m: m.setattr(ghost_auth, "CHAT_API_URL", "http://127.0.0.1:9"), "✗ DreamFort  can't be reached (ConnectError)"),
     (lambda d, m: setattr(d, "balance", 0), "✗ Credits    none left  ->  add some at https://www.dreamfort.ai/dashboard/credits"),
-    (lambda d, m: m.setattr("launch.ensure_bridge", lambda: False), "✗ Bridge     isn't running"),
+    (lambda d, m: (m.setattr("launch.ensure_bridge", lambda: False), m.setattr("launch.port_taken", lambda: False)),
+     "✗ Bridge     isn't running: it didn't start"),
+    (lambda d, m: (m.setattr("launch.ensure_bridge", lambda: False), m.setattr("launch.port_taken", lambda: True)),
+     "✗ Bridge     isn't running: another program is using port 8788"),
     (lambda d, m: m.setattr("launch.engine_binary", lambda: None), "✗ Engine     not installed  ->  ghost update"),
     (lambda d, m: m.setattr("spend._entries", [(time.time(), 6.0)]), "✗ Spending   $6.00 of $5.00 in the last hour  ->  ghost budget 10"),
 ])

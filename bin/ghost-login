@@ -1,4 +1,4 @@
 #!/bin/sh
 # ghost-login -- connect ghost to DreamFort, with your account or an API key (ghost-login --help).
-export GHOST_HOME="__GHOST_HOME__" GHOST_ENGINE="__ENG__"
-exec "__PYTHON__" -Es "$GHOST_HOME/privacy/ghost_login.py" "$@"
+export GHOST_HOME=__GHOST_HOME__ GHOST_ENGINE=__ENG__
+exec __PYTHON__ -Es "$GHOST_HOME/privacy/ghost_login.py" "$@"
