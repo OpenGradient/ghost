@@ -227,17 +227,17 @@ def test_an_update_brings_the_new_model_list(machine):
     assert not any(cache.exists() for cache in caches)
 
 
-def test_your_edits_are_kept_beside_the_new_files(machine):
+def test_an_update_keeps_your_settings(machine):
+    """(tests/test_profile.py has the rest.) An older ghost's, which can't be told from its defaults, are set aside."""
     m = machine()
     m.install()
-    for name in ("config.yaml", "SOUL.md"):
-        with open(m.profile / name, "a") as fh:
-            fh.write("# mine\n")
+    with open(m.profile / "config.yaml", "a") as fh:
+        fh.write("mcp_servers:\n  mine:\n    command: x\n")
     done = m.install()
-    for name in ("config.yaml", "SOUL.md"):
-        assert f"Your previous {name} is kept as {m.profile / name}.prev" in done.stdout
-        assert "# mine" in (m.profile / f"{name}.prev").read_text() and "# mine" not in (m.profile / name).read_text()
-    assert "previous" not in m.install().stdout and "# mine" in (m.profile / "config.yaml.prev").read_text()
+    assert "previous" not in done.stdout and "mcp_servers" in (m.profile / "config.yaml").read_text()
+    shutil.rmtree(m.profile / ".shipped")
+    assert f"Your previous config.yaml is kept as {m.profile / 'config.yaml'}.prev" in m.install().stdout
+    assert "mcp_servers" in (m.profile / "config.yaml.prev").read_text() and "mcp_servers" not in (m.profile / "config.yaml").read_text()
 
 
 @pytest.mark.parametrize("verbose", ["", "1"])

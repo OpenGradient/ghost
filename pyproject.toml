@@ -17,6 +17,8 @@ dependencies = [
     # The certificates this machine trusts, for networks with one of their own.
     "truststore>=0.10",
     "certifi",
+    # Puts your settings back on top of a new release's, comments and all (scripts/write_profile.py).
+    "ruamel-yaml>=0.18",
 ]
 
 [tool.uv]

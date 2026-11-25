@@ -69,7 +69,7 @@ Set these as environment variables on the install command (`curl ... | GHOST_LOC
 
 On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Local -NoBrowser`.
 
-An update installs that release's `config.yaml` and `SOUL.md`; if you changed yours, they're kept beside them as `.prev`.
+An update keeps the settings you changed in `~/.ghost/profiles/uncensored/config.yaml`, and a `SOUL.md` of your own (the release's is then beside it, as `SOUL.md.new`).
 
 **On a company network**, ghost uses the system's proxy (or `HTTPS_PROXY`) and the certificates the system trusts. It needs to reach `chat-api.memchat.io`, and `ogevmdevnet.opengradient.ai`, where it reads which enclaves to trust. If the network inspects TLS, exempt the second one: ghost won't take that from an intercepted connection, and falls back to an enclave built into the release.
 
