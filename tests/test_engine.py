@@ -158,6 +158,16 @@ def test_prefill_reaches_the_model(engine):
     assert out.endswith("/.ghost/privacy/uncensored_prefill.json")
 
 
+def test_long_chats_are_summarized_before_they_get_expensive(engine):
+    """No prompt cache on the gateway: at $3/M a 500K-token chat would cost $1.50 a step."""
+    out = engine("from run_agent import AIAgent\nfrom hermes_cli.runtime_provider import resolve_runtime_provider\n"
+                 "r = resolve_runtime_provider(requested='opengradient')\n"
+                 "a = AIAgent(model='abliteration/abliterated-model-large-v2', provider=r['provider'], base_url=r['base_url'],"
+                 " api_key=r['api_key'], quiet_mode=True, skip_context_files=True, skip_memory=True)\n"
+                 "out = [a.context_compressor.threshold_tokens, a.context_compressor.context_length]")
+    assert out == [160000, 1048576]
+
+
 def test_every_route_is_served_by_the_bridge(profile):
     bridge = (REPO / "privacy" / "scrubbing_proxy.py").read_text(encoding="utf-8")
     served = set(re.findall(r'(?m)^    \("([\w./-]+)", "', bridge.split("_CATALOG_MODELS = [", 1)[1].split("\n]", 1)[0]))

@@ -38,6 +38,9 @@ fallback_providers: []
 agent:
   max_turns: 200
   reasoning_effort: low
+  # The relay bills every attempt it accepts. The bridge already retries what it safely can.
+  api_max_retries: 2
+  auto_recovery_cycles: 1
   service_tier: fast
   task_completion_guidance: false
   environment_probe: false
@@ -163,6 +166,11 @@ auxiliary:
 delegation:
   reasoning_effort: low
 prefill_messages_file: __HOME__/.ghost/privacy/uncensored_prefill.json
+# The gateway has no prompt cache, so the whole conversation is paid for again on every step: old tool
+# output is dropped early, and a chat is summarized well before the 1M window is full.
+compression:
+  threshold_tokens: 160000
+  proactive_prune_tokens: 48000
 memory:
   memory_enabled: false
   user_profile_enabled: false
@@ -231,7 +239,6 @@ platform_toolsets:
   - delegation
   - file
   - image_gen
-  - kanban
   - session_search
   - skills
   - terminal
