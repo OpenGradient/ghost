@@ -36,11 +36,12 @@ jobs:
       - run: pip install pytest uv httpx "opengradient-ohttp>=0.1,<0.2"
       - name: Install ghost
         if: runner.os != 'Windows'
-        run: ./install.sh
+        run: set -o pipefail; ./install.sh | tee "$HOME/install.txt"
+        shell: bash
       - name: Install ghost (Windows)
         if: runner.os == 'Windows'
         shell: powershell
-        run: .\install.ps1
+        run: .\install.ps1 | Tee-Object -FilePath "$HOME\install.txt"; if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Use it before logging in
         shell: bash
         run: |
@@ -48,6 +49,7 @@ jobs:
           case "$RUNNER_OS" in Windows) ghost() { cmd //c "$(cygpath -w "$HOME/.local/bin/$1.cmd")" "${@:2}"; } ;; *) ghost() { "$HOME/.local/bin/$1" "${@:2}"; } ;; esac
           ghost ghost --version | tee version; grep -q "^Ghost v" version
           curl -fs http://127.0.0.1:8788/healthz
+          if grep -E "✓ Starting the background service [0-9]+s" "$HOME/install.txt"; then exit 1; fi   # it takes a second, not half a minute
           started=$SECONDS
           if ghost ghost -z hi </dev/null >out 2>&1; then exit 1; fi
           cat out; grep -q "not logged in" out; test $((SECONDS - started)) -lt 15

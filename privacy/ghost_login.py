@@ -20,13 +20,14 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 
 import ghost_auth
 from ghost_auth import AuthError
+from localhttp import LocalServer
 
 APP_URL = os.environ.get("GHOST_CHAT_APP_URL", "https://www.dreamfort.ai").rstrip("/")
 KEYS_URL = f"{ghost_auth.CONSOLE_URL}/api-keys"
@@ -335,7 +336,7 @@ def _loopback(received):
                 return self._reply(400, b'{"ok": false}')
             self._reply(200, b'{"ok": true}')
 
-    return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    return LocalServer(("127.0.0.1", 0), Handler)
 
 
 def browser_login(*, paste_only=False):

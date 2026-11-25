@@ -227,6 +227,19 @@ def test_each_login_has_its_own_relay(monkeypatch, bridge, login, relay, token, 
     assert (status, seen) == (402, [(relay, f"Bearer {token}")]) and words in message
 
 
+def test_it_answers_as_soon_as_it_starts(monkeypatch):
+    """The standard server asks DNS for its own name first; on many a Mac that takes half a minute."""
+    import socket
+
+    def slow(*args):
+        raise AssertionError("looked up its own name")
+    for name in ("getfqdn", "gethostbyaddr"):
+        monkeypatch.setattr(socket, name, slow)
+    server = sp.LocalServer(("127.0.0.1", 0), sp.Handler)
+    assert server.server_port == server.server_address[1] and server.server_name == "127.0.0.1"
+    server.server_close()
+
+
 def test_the_bridge_says_which_process_it_is(bridge):
     with urllib.request.urlopen(bridge.url + "/healthz", timeout=5) as resp:
         assert (resp.read(), resp.headers["X-Ghost-Pid"]) == (b"ok", str(os.getpid()))
