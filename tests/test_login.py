@@ -31,7 +31,7 @@ class DreamFort:
 
     def __init__(self):
         self.seen, self.device, self.polls_before_approval, self.credits, self.renewals = [], True, 2, True, 200
-        self.errors = []
+        self.errors, self.relay, self.balance = [], 200, 12.5
         dream = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -47,6 +47,9 @@ class DreamFort:
 
             def do_GET(self):
                 dream.seen.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path.endswith(("/credits/balance", "/chat/ohttp/config")):
+                    ok = self.headers.get("Authorization") in ("Bearer token", "Bearer renewed") and dream.relay == 200
+                    return self._answer(200 if ok else dream.relay if dream.relay != 200 else 401, {"balanceUsd": dream.balance})
                 good = self.headers.get("Authorization") == f"Bearer {GOOD_KEY}"
                 self._answer(200 if self.path.endswith("/developer/ohttp/config") and good else 401)
 
@@ -273,6 +276,67 @@ def test_output_survives_an_ascii_locale(dream, tmp_path):
     env = {**os.environ, "GHOST_HOME": str(tmp_path), "OG_VEIL_HOME": str(tmp_path / "v"), "GHOST_CHAT_API_URL": dream.url, "PYTHONIOENCODING": "ascii"}
     done = subprocess.run([sys.executable, str(PRIVACY / "ghost_login.py"), "--with-api-key"], input=BAD_KEY.encode(), env=env, capture_output=True, timeout=30)
     assert done.returncode == 1 and "✗ DreamFort doesn't accept that key" in done.stdout.decode("utf-8") and done.stderr == b""
+
+
+# ── ghost doctor, ghost usage ─────────────────────────────────────────────────
+@pytest.fixture
+def machine(dream, tmp_path, monkeypatch):
+    """Everything on this machine in order, unless a test says otherwise."""
+    import doctor
+    import launch
+    import spend
+    binary = tmp_path / "engine.py"
+    binary.write_text("print('Ghost v9 (stub)')")
+    monkeypatch.setattr(launch, "engine_binary", lambda: binary)
+    run = subprocess.run
+    monkeypatch.setattr(doctor.subprocess, "run", lambda cmd, **kw: run([sys.executable, *cmd], **kw))
+    monkeypatch.setattr(launch, "ensure_bridge", lambda: True)
+    monkeypatch.setattr(spend, "_entries", [(time.time(), 0.21)])
+    monkeypatch.setattr(spend, "BUDGET_FILE", tmp_path / "budget")
+    monkeypatch.setattr(spend, "LEDGER", tmp_path / "spend.jsonl")
+    return doctor
+
+
+def test_doctor_when_all_is_well(dream, machine, capsys):
+    ghost_auth.save_account(dream.bundle())
+    assert machine.main() == 0
+    out = capsys.readouterr().out
+    for words in ("✓ Engine     Ghost v9 (stub)", "✓ Login      DreamFort account (mara@example.com)", "✓ Bridge     running", "✓ DreamFort  reachable",
+                  "✓ Credits    $12.50 left", "✓ Spending   $0.21 of $5.00"):
+        assert words in out
+    assert [s[1] for s in dream.seen] == ["/api/v1/chat/ohttp/config", "/api/v1/credits/balance"]   # and no model
+
+
+def test_doctor_contacts_nobody_before_you_log_in(dream, machine, capsys):
+    assert machine.main() == 1
+    out = capsys.readouterr().out
+    assert "✗ Login      nobody is logged in  ->  ghost login" in out and "DreamFort " not in out and dream.seen == []
+
+
+@pytest.mark.parametrize("wrong, words", [
+    (lambda d, m: setattr(d, "relay", 401), "✗ DreamFort  doesn't accept this login any more  ->  ghost login"),
+    (lambda d, m: setattr(d, "relay", 503), "✗ DreamFort  isn't well (503)"),
+    (lambda d, m: m.setattr(ghost_auth, "CHAT_API_URL", "http://127.0.0.1:9"), "✗ DreamFort  can't be reached (ConnectError)"),
+    (lambda d, m: setattr(d, "balance", 0), "✗ Credits    none left  ->  add some at https://www.dreamfort.ai/dashboard/credits"),
+    (lambda d, m: m.setattr("launch.ensure_bridge", lambda: False), "✗ Bridge     isn't running"),
+    (lambda d, m: m.setattr("launch.engine_binary", lambda: None), "✗ Engine     not installed  ->  ghost update"),
+    (lambda d, m: m.setattr("spend._entries", [(time.time(), 6.0)]), "✗ Spending   $6.00 of $5.00 in the last hour  ->  ghost budget 10"),
+])
+def test_doctor_says_what_is_wrong_and_what_to_do(dream, machine, monkeypatch, capsys, wrong, words):
+    ghost_auth.save_account(dream.bundle())
+    wrong(dream, monkeypatch)
+    assert machine.main() == 1 and words in capsys.readouterr().out
+
+
+def test_usage_shows_what_is_left(dream, machine, capsys):
+    import spend
+    spend.main(["usage"])
+    assert "Credits left" not in capsys.readouterr().out and dream.seen == []
+    ghost_auth.save_account(dream.bundle())
+    spend.main(["usage"])
+    assert "Credits left   $   12.50" in capsys.readouterr().out
+    dream.relay = 500
+    assert spend.main(["usage"]) == 0 and "Credits left" not in capsys.readouterr().out
 
 
 # ── in a terminal ─────────────────────────────────────────────────────────────

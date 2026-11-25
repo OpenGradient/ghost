@@ -84,7 +84,7 @@ def test_a_chat_needs_a_login_and_says_so_at_once(box, capsys, args):
     assert time.time() - started < 2 and (box.ran, box.started) == ([], [])
 
 
-@pytest.mark.parametrize("args", [["--version"], ["-V"], ["sessions", "list"], ["gateway", "status"], ["doctor"]])
+@pytest.mark.parametrize("args", [["--version"], ["-V"], ["sessions", "list"], ["gateway", "status"], ["cron", "list"]])
 def test_everything_else_works_without_one(box, args):
     assert launch.main(args) == 0
     assert (box.ran, box.started) == ([args], [])   # and contacts nobody, not even the bridge
@@ -245,6 +245,15 @@ def test_a_missing_engine_is_explained(tmp_path):
     env = {**os.environ, "GHOST_HOME": str(tmp_path), "GHOST_ENGINE": str(tmp_path / "none")}
     done = subprocess.run([sys.executable, "-Es", launch.__file__, "--version"], env=env, capture_output=True, timeout=30)
     assert done.returncode == 1 and "ghost update" in done.stderr.decode("utf-8", "replace")
+
+
+def test_commands_of_the_engine_that_would_leave_the_private_path_are_ghosts_own(box, monkeypatch):
+    """Its setup offers other providers, and its doctor contacts 44 vendors."""
+    import doctor
+    import ghost_login
+    monkeypatch.setattr(doctor, "main", lambda: 41)
+    monkeypatch.setattr(ghost_login, "main", lambda args: 42)
+    assert (launch.main(["doctor"]), launch.main(["setup"]), box.ran) == (41, 42, [])
 
 
 def test_help_names_the_commands(capsys):

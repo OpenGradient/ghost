@@ -23,6 +23,8 @@ BUNDLE_TYPE = "opengradient-cli-auth"   # what the website's /cli-auth page hand
 KEY_FILE = Path(os.environ.get("GHOST_HOME") or Path.home() / ".ghost") / "privacy" / "dreamfort_api_key"
 SESSION_FILE = Path(os.environ.get("OG_VEIL_HOME") or Path.home() / ".opengradient" / "veil") / "session.json"
 
+CREDITS_URL = "https://www.dreamfort.ai/dashboard/credits"
+CONSOLE_URL = "https://api.dreamfort.ai"
 NOT_LOGGED_IN = "not logged in to DreamFort; run `ghost-login`"
 EXPIRED = "your DreamFort login has expired; run `ghost-login` to connect again"
 
@@ -160,6 +162,18 @@ def credentials():
         if _expired(session):
             session = _refresh(session)
     return CHAT_API_URL + ACCOUNT_RELAY, session["access_token"]
+
+
+def balance():
+    """Dollars left on the account. None when it can't be told (a key isn't served its balance)."""
+    if api_key() or not account():
+        return None
+    import httpx
+    try:
+        resp = httpx.get(f"{CHAT_API_URL}/api/v1/credits/balance", headers={"Authorization": f"Bearer {credentials()[1]}"}, timeout=10)
+        return float(resp.json()["balanceUsd"]) if resp.status_code == 200 else None
+    except (AuthError, httpx.HTTPError, ValueError, KeyError, TypeError):
+        return None
 
 
 def forget_api_key():

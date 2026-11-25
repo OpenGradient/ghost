@@ -38,12 +38,13 @@ ghost -- a private, unrestricted agent in your terminal
   ghost --local             use the offline model (nothing leaves this machine)
 
   ghost login | logout      connect your DreamFort account or API key
-  ghost usage               what hosted models have cost you
+  ghost doctor              check that everything works
+  ghost usage               what hosted models have cost you, and your credits
   ghost budget [N|off]      the hourly spending limit
   ghost update              get the latest release
   ghost uninstall           remove ghost
 
-Everything else goes to the engine, for example: ghost sessions, ghost gateway, ghost doctor, ghost config
+Everything else goes to the engine, for example: ghost sessions, ghost gateway, ghost cron, ghost config
 (each takes --help)."""
 
 
@@ -161,10 +162,14 @@ def ensure_bridge():
 
 
 # ── the engine ────────────────────────────────────────────────────────────────
-def run_engine(args):
+def engine_binary():
     bin_dir = ENGINE / ".hermes" / "bin"
     names = ("hermes.exe", "hermes.cmd") if os.name == "nt" else ("hermes",)
-    engine = next((bin_dir / n for n in names if (bin_dir / n).exists()), None)
+    return next((bin_dir / n for n in names if (bin_dir / n).exists()), None)
+
+
+def run_engine(args):
+    engine = engine_binary()
     if engine is None:
         say(f"the engine isn't installed ({ENGINE}). Put it back with: ghost update")
         return 1
@@ -229,9 +234,12 @@ def main(argv):
     if command in ("help", "--help", "-h"):
         print(HELP)
         return 0
-    if command in ("login", "logout"):
+    if command in ("login", "logout", "setup"):   # (the engine's own setup would leave the private path)
         import ghost_login
-        return ghost_login.main(args[1:] if command == "login" else ["--logout"])
+        return ghost_login.main(["--logout"] if command == "logout" else args[1:])
+    if command == "doctor":                          # (the engine's own asks 44 vendors how they are)
+        import doctor
+        return doctor.main()
     if command in ("usage", "budget"):
         return spend.main(args)
     if command in ("--scrub", "--preview"):   # never let someone believe it's still on
