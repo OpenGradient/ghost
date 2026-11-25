@@ -15,7 +15,9 @@ dependencies = [
     "opengradient-veil>=0.2.8,<0.3",
     # The SDK's TEE_LLM enum is what `og-veil models` reports; 1.1.1 adds deepseek-v4-pro.
     "opengradient>=1.1.1",
-    # The scrubbing bridge forwards to og-veil's local server.
+    # The bridge's transport: seals each request to an enclave (OHTTP/HPKE) and checks the signature on
+    # every reply. og-veil's own client leaves out reasoning_effort and gives up after 120s of silence.
+    "opengradient-ohttp>=0.1,<0.2",
     "httpx>=0.27",
 ]
 
