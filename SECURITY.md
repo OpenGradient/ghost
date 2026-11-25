@@ -1,9 +1,10 @@
 # Security Policy
 
-ghost is a privacy tool. Its core promise is that what you send a hosted model is readable only
-inside an attested TEE enclave, never by the relay or anyone else on the way, and that a reply is
-verified before a token of it is shown. A bug that breaks that promise is the most serious kind of
-bug here.
+ghost is a privacy tool. Its core promise is that what you send a hosted model leaves this machine
+sealed to an attested TEE enclave, so that no one who knows who you are can read it and no one who can
+read it knows who you are (the README's "How the private path works" says who sees what), and that a
+reply is verified before a token of it is shown. A bug that breaks that promise is the most serious
+kind of bug here.
 
 ## Reporting a vulnerability
 
