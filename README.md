@@ -46,7 +46,7 @@ The first run asks how you want to log in. Nothing is contacted before that.
 | | |
 |---|---|
 | `ghost` | Start chatting. `ghost -c` continues your last chat. |
-| `ghost -z "question"` | Ask once and print the answer. |
+| `ghost -z "question"` | Ask once and print the answer. A long question can come from a file: `ghost chat --query-file FILE` (`-` for stdin). |
 | `ghost --local` | Use the offline model: what you type stays on this machine, and the web tools are off. |
 | `ghost doctor` | Check that everything works, and what to do if it doesn't. |
 | `ghost usage` / `ghost budget` | What hosted models have cost you, what credits are left, and the hourly limit. |
