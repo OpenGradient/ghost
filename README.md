@@ -145,7 +145,7 @@ The agent's own web searches, page fetches and browser go out from your machine 
 
 ## Honest limits
 
-- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`. What comes back unusable is reported, not paid for again: at most one retry, when the connection broke.
+- **Hosted models cost credits.** `ghost usage` shows what you've spent, and ghost pauses itself after $5 in an hour so nothing runs away with your balance; change that with `ghost budget 20` or `ghost budget off`. What comes back unusable is reported, not paid for again: at most one retry, when the connection broke. Leaving a chat stops it: close the window, press Ctrl-C or kill ghost mid-task, and nothing more is sent or paid for.
 - **Chats don't stay.** A chat is deleted a day after it ends, along with what you typed. To keep them, set `sessions.auto_prune: false` in `~/.ghost/profiles/uncensored/config.yaml`.
 - **Your keys stay yours.** Keys for other vendors in your environment (OpenAI, OpenRouter, ...) are kept from the engine, so nothing goes to them by surprise. Put one in `~/.ghost/profiles/uncensored/.env` to use it on purpose.
 - **Replies arrive whole.** The signature covers the complete reply, so ghost shows it once it's verified rather than word by word.

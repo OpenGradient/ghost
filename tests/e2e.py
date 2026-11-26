@@ -7,6 +7,7 @@ CI runs it after installing. It takes the bridge's place, so don't run it on a m
 import json
 import os
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -29,6 +30,26 @@ def requests():
     rows = [json.loads(line) for line in LOG.read_text(encoding="utf-8").splitlines()]
     LOG.write_text("", encoding="utf-8")
     return rows
+
+
+def leave_mid_turn():
+    """A chat that runs a command for 20 seconds, killed a few seconds in: the requests made for it, once the command
+    would have ended. One, unless the turn went on with nobody there."""
+    ping = f"ping {'-n' if WINDOWS else '-c'} 20 127.0.0.1"
+    chat = subprocess.Popen([str(BIN / ("ghost.cmd" if WINDOWS else "ghost")), "-z", f"[[run {ping}]]", "--yolo"], env=ENV,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}))
+    deadline = time.time() + 120
+    while not LOG.read_text(encoding="utf-8").strip() and time.time() < deadline:
+        time.sleep(0.5)
+    time.sleep(5)   # the command is running
+    if WINDOWS:
+        subprocess.run(["taskkill", "/f", "/t", "/pid", str(chat.pid)], capture_output=True)
+    else:
+        os.killpg(chat.pid, signal.SIGKILL)
+    chat.wait()
+    time.sleep(30)   # it would end in about 15 seconds, and a turn still going asks the model again then
+    return requests()
 
 
 def up():
@@ -90,6 +111,8 @@ def main():
         code, out = run("ghost", "-z", "[[run echo made-by-ghost]]", "--yolo")
         good &= check("it runs a command", "ran: " in out and "made-by-ghost" in out, out)
         requests()
+        asked = leave_mid_turn()
+        good &= check("a chat you leave stops, and nothing more is sent", len([r for r in asked if r.get("tools")]) == 1, asked)
         code, out = run("ghost", "-z", "[[fail cut]]")
         good &= check("a reply that breaks off is paid for twice at most", sum(r.get("billed", False) for r in requests()) <= 2 and "stopped retrying" in out, out)
         code, out = run("ghost", "-z", "[[fail 402]]")
