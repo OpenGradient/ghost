@@ -188,6 +188,40 @@ def test_a_side_task_stays_on_its_own_model(engine):
     assert engine("from agent.auxiliary_client import _try_main_agent_model_fallback as f\nout = list(f('opengradient', task='title_generation'))") == [None, None, ""]
 
 
+def test_leaving_a_chat_stops_it(engine):
+    """The last viewer leaving a chat a person started withdraws what it queued and stops its turn. A bot's or a cron
+    job's turn, and a chat somebody is still in, are left alone. (tests/e2e.py leaves one for real.)"""
+    did = engine('''
+import asyncio, threading, types
+from gateway.session_viewer_close import stop_unwatched
+class Authority:
+    profile_id = "default"
+    def __init__(self, source, watched):
+        receipt = types.SimpleNamespace(policy={"source": source}, current_target="s1")
+        self.persistence = types.SimpleNamespace(bindings=types.SimpleNamespace(receipt=lambda sid: receipt),
+                                                 sessions=types.SimpleNamespace(get=lambda sid: None))
+        self.sessions = {"s1": types.SimpleNamespace(subscribers={"v": 1} if watched else {}, source=object(), route="r",
+                                                     event_stream=types.SimpleNamespace(lock=threading.Lock()))}
+        self.did = []
+    def _pending_rows(self, ref):
+        return [{"admission_id": "queued-1", "status": "queued"}, {"admission_id": "running-1", "status": "started"}]
+    async def cancel_or_claimed(self, actor, ref, admission_id):
+        self.did.append("withdrew " + admission_id)
+    def _handle(self, ref):
+        return types.SimpleNamespace(execution_state="running", execution_generation=3)
+    async def interrupt(self, actor, ref, generation):
+        self.did.append("stopped %d" % generation)
+out = {}
+for source, watched, orphaned in [("cli", False, False), ("oneshot", False, True), ("telegram", False, True),
+                                  ("cron", False, False), ("cli", True, True)]:
+    authority = Authority(source, watched)
+    asyncio.run(stop_unwatched(authority, None, "s1", orphaned=orphaned))
+    out["%s%s" % (source, " (watched)" if watched else "")] = authority.did
+''')
+    stopped = ["withdrew queued-1", "stopped 3"]
+    assert did == {"cli": stopped, "oneshot": stopped, "telegram": [], "cron": [], "cli (watched)": []}
+
+
 def test_searches_ask_one_engine_at_a_time(engine):
     asked = engine("""
 import sys, types

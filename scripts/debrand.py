@@ -117,6 +117,64 @@ GHOST_ART = """[#FFD700]    ▄████████████▄[/]
 [#CD7F32]    ██▀██▀██▀██▀██[/]"""
 ART_CONSTS = [("HERMES_AGENT_LOGO", GHOST_LOGO), ("HERMES_CADUCEUS", GHOST_ART)]
 
+# What the gateway does when the last viewer leaves a chat a person started (the patches below wire it in).
+STOP_UNWATCHED = '''
+
+
+# The chats a person types into here: a window, or `ghost -z`. Bots, cron, kanban and editors keep upstream's way.
+_TYPED_INTO = frozenset({'cli', 'tui', 'oneshot'})
+
+
+def _typed_into(authority, session_id):
+    """Blocking: *session_id* was opened by a person at this machine (its frozen launch source)."""
+    store = authority_persistence(authority)
+    try:
+        receipt = store.bindings.receipt(session_id)
+        row = store.sessions.get(receipt.current_target)
+    except (AuthorityRefusal, KeyError, TypeError):
+        return False
+    return ((receipt.policy or {}).get('source') or getattr(row, 'source', None)) in _TYPED_INTO
+
+
+async def stop_unwatched(authority, actor, session_id, *, orphaned=False):  @NOTE
+    """The last viewer left a chat a person started: it closed, was killed, or lost its terminal. Its
+    queued input is withdrawn and its turn stopped, so nothing more is sent or paid for with nobody
+    there; one that vanished without closing also ends the delegations a close would have ended.
+    The chat itself stays, and resumes."""
+    try:
+        await _stop_unwatched(authority, actor, session_id, orphaned)
+    except Exception:  # health: allow BLE001 -- the viewer's detach must still go through
+        logger.warning('Could not stop the work of %s after its last viewer left', session_id, exc_info=True)
+
+
+async def _stop_unwatched(authority, actor, session_id, orphaned):
+    live = authority.sessions.get(session_id)
+    if live is None or live.subscribers or is_history_mount(live):
+        return
+    if not await asyncio.to_thread(_typed_into, authority, session_id):
+        return
+    from gateway.session_contract import SessionRef
+    ref = SessionRef(authority.profile_id, session_id)
+    if orphaned:
+        from tools.async_delegation import interrupt_for_session, refuse_for_session
+        parents = tuple(dict.fromkeys((session_id, _physical_target(authority, session_id))))
+        refuse_for_session((authority.profile_id, session_id), session_key=live.route, parent_session_ids=parents)
+        for parent in parents:
+            interrupt_for_session(session_key=live.route, parent_session_id=parent, reason='viewer_gone')
+    with live.event_stream.lock:
+        queued = [row['admission_id'] for row in authority._pending_rows(ref) if row.get('status') == 'queued']
+    for admission_id in queued:
+        with contextlib.suppress(AuthorityRefusal, KeyError):
+            await authority.cancel_or_claimed(actor, ref, admission_id)
+    if live.subscribers:
+        return
+    with contextlib.suppress(AuthorityRefusal, KeyError):
+        handle = authority._handle(ref)
+        if handle.execution_state == 'running':
+            from gateway.session_managed_worker import interrupt_managed
+            if not interrupt_managed(authority, actor, ref, handle.execution_generation):
+                await authority.interrupt(actor, ref, handle.execution_generation)'''
+
 # Incognito code patches: (path, find-regex, replacement, note). @NOTE in the replacement becomes the
 # comment `# ghost: <note>`, unique within its file, which is how a second run knows a patch is in.
 MARK = "# ghost:"
@@ -235,6 +293,24 @@ CODE_PATCHES = [
      '    _skip = _re.compile(r"nous|portal|subscription|sonnet|opus|claude|gpt-|gemini|grok|openrouter", _re.I)\n'
      "    keys = [k for k in tip_keys() if not _skip.search(t(k, lang=DEFAULT_LANGUAGE))]  @NOTE\n",
      "open-weight only"),
+    # -- leaving a chat stops it. Upstream lets a turn run on for a viewer that closed, was killed or lost its terminal,
+    # and finishes it at your expense with nobody there; `ghost -z` even says so on Ctrl-C. Here the last viewer
+    # leaving a chat you started withdraws what it queued and stops the turn. The chat stays, and resumes.
+    ("gateway/session_viewer_close.py",
+     r"(\n\n\nasync def close_viewer_session\(authority, session_id, reason\):\n)",
+     STOP_UNWATCHED + r"\1",
+     "leaving a chat stops it"),
+    ("gateway/session_authority.py",
+     r"(                        await asyncio\.to_thread\(release_editor_mcp, self, \[session_id\]\)\n)",
+     r"\1"
+     "                        if end_reason or orphaned:  @NOTE\n"
+     "                            from gateway.session_viewer_close import stop_unwatched\n"
+     "                            await stop_unwatched(self, actor, session_id, orphaned=orphaned)\n",
+     "nobody is left in the chat"),
+    ("hermes_cli/gateway_chat.py",
+     r'print\("Detached; accepted work continues at the gateway\.", file=sys\.stderr\)',
+     'print("Stopped.", file=sys.stderr)  @NOTE',
+     "the gateway stops what this chat started"),
 ]
 
 # Upstream defaults ghost flips off for EVERY profile. The shipped profile sets these too; baking them
